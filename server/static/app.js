@@ -633,6 +633,7 @@ function openMenu(anchor, items) {
   m.className = 'menu';
   for (const it of items) {
     if (it === '-') { m.append(document.createElement('hr')); continue; }
+    if (it.head) { const h = document.createElement('span'); h.className = 'menu-head'; h.textContent = it.head; m.append(h); continue; }
     const b = document.createElement('button');
     b.textContent = it.label;
     if (it.danger) b.className = 'danger';
@@ -666,11 +667,11 @@ function renderTabs() {
     more.addEventListener('click', (e) => {
       e.stopPropagation();
       openMenu(more, [
-        { label: 'Renombrar', fn: () => renameShape(sh, name) },
-        { label: 'Duplicar', fn: () => addShape(sh.comp, sh) },
-        { label: 'Guardar en la biblioteca…', fn: () => openSaveToLibrary(sh) },
+        { label: '✎ Renombrar', fn: () => renameShape(sh, name) },
+        { label: '⧉ Duplicar', fn: () => addShape(sh.comp, sh) },
+        { label: '⭐ Guardar en la biblioteca…', fn: () => openSaveToLibrary(sh) },
         '-',
-        { label: 'Eliminar', danger: true, fn: () => deleteShape(sh.id) },
+        { label: '🗑 Eliminar', danger: true, fn: () => deleteShape(sh.id) },
       ]);
     });
     t.append(name, more);
@@ -680,7 +681,7 @@ function renderTabs() {
   plus.className = 'tab-plus'; plus.textContent = '+'; plus.title = 'Añadir un objeto detectado o importar de otro proyecto'; plus.setAttribute('aria-label', 'Añadir forma');
   plus.addEventListener('click', (e) => {
     e.stopPropagation();
-    openMenu(plus, [...S.st.contours.components.map((c) => ({ label: `Objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => addShape(c.id) })), '-', { label: 'Forma manual (medidas / dibujo)…', fn: openManual }, { label: 'Compartimentos (filas × columnas)…', fn: openCompartments }, { label: 'Importar SVG o DXF…', fn: openVector }, { label: 'Importar de otro proyecto…', fn: openImport }, { label: 'Biblioteca de formas…', fn: openLibrary }]);
+    openMenu(plus, [{ head: 'Objetos detectados' }, ...S.st.contours.components.map((c) => ({ label: `◻ Objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => addShape(c.id) })), '-', { head: 'Crear' }, { label: '✏️ Forma manual (medidas / dibujo)…', fn: openManual }, { label: '▦ Compartimentos (filas × columnas)…', fn: openCompartments }, '-', { head: 'Importar' }, { label: '📐 Importar SVG o DXF…', fn: openVector }, { label: '📁 Importar de otro proyecto…', fn: openImport }, { label: '⭐ Biblioteca de formas…', fn: openLibrary }]);
   });
   box.append(plus);
 }
@@ -1317,6 +1318,7 @@ function renderSettings() {
   $('s-auto').disabled = c.partial;
   renderCells();
   renderDividerFields();
+  renderAccSummaries();
   $('s-ithk').disabled = $('s-ifit').disabled = !c.contrast_insert;
   $('s-md').disabled = $('s-mdep').disabled = !c.magnet_holes;
   for (const id of ['s-rib', 's-hfloor', 's-lidt', 's-ledge', 's-lidc']) $(id).disabled = !c.hollow;
@@ -1408,13 +1410,13 @@ function renderBinTabs() {
     more.addEventListener('click', (e) => {
       e.stopPropagation();
       openMenu(more, [
-        { label: 'Renombrar', fn: async () => {
+        { label: '✎ Renombrar', fn: async () => {
           const v = (window.prompt('Nombre del bin', b.name) || '').trim();
           if (!v) return;
           try { await api(`/api/sessions/${S.st.id}/bins/${b.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ name: v }) }); if (b.id === 'b1') S.st.bin1_name = v; else S.st.bins[b.id].name = v; renderBinTabs(); } catch (er) { toast(er.message, true); }
         } },
-        { label: 'Duplicar', fn: async () => { if (b.id !== S.bin) await switchBin(b.id); await newBin({ copy: true, name: `${b.name} copia` }); } },
-        ...(b.id === 'b1' ? [] : ['-', { label: 'Eliminar', danger: true, fn: async () => {
+        { label: '⧉ Duplicar', fn: async () => { if (b.id !== S.bin) await switchBin(b.id); await newBin({ copy: true, name: `${b.name} copia` }); } },
+        ...(b.id === 'b1' ? [] : ['-', { label: '🗑 Eliminar', danger: true, fn: async () => {
           if (!window.confirm(`¿Eliminar «${b.name}»?`)) return;
           await flushBuild();
           try { await api(`/api/sessions/${S.st.id}/bins/${b.id}`, { method: 'DELETE' }); await loadBin('b1'); renderBin(); } catch (er) { toast(er.message, true); }
@@ -1429,15 +1431,15 @@ function renderBinTabs() {
   plus.addEventListener('click', (e) => {
     e.stopPropagation();
     openMenu(plus, [
-      { label: 'Bin con todos los objetos', fn: () => newBin({ comps: S.st.contours.components.map((c) => c.id) }) },
-      ...S.st.contours.components.map((c) => ({ label: `Bin solo con el objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => newBin({ comps: [c.id] }) })),
-      '-', { label: 'Duplicar el bin actual', fn: () => newBin({ copy: true }) },
-      { label: 'Complemento del bin actual (Partial bin, vacío)', fn: () => {
+      { head: 'Nuevo bin' }, { label: '🧱 Bin con todos los objetos', fn: () => newBin({ comps: S.st.contours.components.map((c) => c.id) }) },
+      ...S.st.contours.components.map((c) => ({ label: `◻ Bin solo con el objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => newBin({ comps: [c.id] }) })),
+      '-', { head: 'A partir del actual' }, { label: '⧉ Duplicar el bin actual', fn: () => newBin({ copy: true }) },
+      { label: '⇄ Complemento del bin actual (Partial bin, vacío)', fn: () => {
         const c = CFG();
         if (!c.partial || !(c.cells_off || []).length) return toast('Activa Partial bin y apaga alguna celda: el complemento rellena ese hueco', true);
         newBin({ mode: 'complement', name: `${binList().find((x) => x.id === S.bin).name} · complemento` });
       } },
-      { label: 'Contenedor vacío (sin siluetas, p. ej. tornillos)', fn: () => newBin({ mode: 'empty', name: 'Contenedor' }) },
+      { label: '🗃 Contenedor vacío (sin siluetas, p. ej. tornillos)', fn: () => newBin({ mode: 'empty', name: 'Contenedor' }) },
     ]);
   });
   box.append(plus);
@@ -1653,6 +1655,36 @@ $('btn-merge').addEventListener('click', async () => {
     if (st) { toast('Proyecto fusionado creado'); openSession(st.id); }
   });
 });
+
+/* ---- v1.3: ajustes en secciones plegables y menu Exportar */
+const ACC_KEY = 'twin.acc';
+const accOpen = () => { try { const v = JSON.parse(localStorage.getItem(ACC_KEY) || 'null'); return v === 'all' ? 'all' : Array.isArray(v) ? v : ['size']; } catch (e) { return ['size']; } };
+const accSave = () => { try { localStorage.setItem(ACC_KEY, JSON.stringify([...document.querySelectorAll('details.acc[open]')].map((d) => d.dataset.acc))); } catch (e) { /* sin almacenamiento */ } };
+(() => {
+  const o = accOpen();
+  document.querySelectorAll('details.acc').forEach((d) => { d.open = o === 'all' || o.includes(d.dataset.acc); d.addEventListener('toggle', accSave); });
+  $('s-acc-all').addEventListener('click', () => {
+    const all = [...document.querySelectorAll('details.acc')], open = all.some((d) => !d.open);
+    all.forEach((d) => { d.open = open; });
+    accSave();
+  });
+  const menu = $('dl-menu'), btn = $('dl-menu-btn');
+  const setMenu = (on) => { menu.classList.toggle('hidden', !on); btn.setAttribute('aria-expanded', on); };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); setMenu(menu.classList.contains('hidden')); });
+  menu.addEventListener('click', (e) => { if (e.target.closest('a')) setTimeout(() => setMenu(false), 50); });
+  document.addEventListener('click', (e) => { if (!menu.contains(e.target) && e.target !== btn) setMenu(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
+})();
+function renderAccSummaries() {
+  const c = CFG(), [gw, gd] = binGrid(), nd = (c.dividers_x || []).length + (c.dividers_y || []).length;
+  const set = (k, t) => { const el = $('sum-' + k); if (el) el.textContent = t; };
+  set('size', `${gw}×${gd} · ${c.height_units}u${c.partial ? ' · parcial' : ''}`);
+  set('pocket', `${c.pocket_depth_mm} mm${c.contrast_insert ? ' · inserto' : ''}`);
+  set('dividers', nd ? `${nd} · ${c.dividers_mode === 'fixed' ? 'integrados' : 'sueltos'}` : 'ninguno');
+  set('structure', [c.stacking_lip ? 'labio' : '', c.magnet_holes ? 'imanes' : '', `${c.wall_thickness_mm} mm`].filter(Boolean).join(' · '));
+  set('hollow', c.hollow ? 'activado' : 'desactivado');
+  set('printer', `${c.bed_x_mm}×${c.bed_y_mm} · ⌀${c.nozzle_mm}`);
+}
 
 /* ---- puesta en marcha del editor */
 function refreshEditor() { renderHist(); renderBinTabs(); renderTabs(); renderToolbar(); renderPop(); renderSettings(); renderLayout(); }

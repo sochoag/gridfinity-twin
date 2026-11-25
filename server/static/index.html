@@ -144,9 +144,13 @@
       <input id="ed-name" class="ed-title" maxlength="80" aria-label="Nombre del bin">
       <span id="ed-saved" class="muted">Guardado</span>
       <span class="grow"></span>
-      <span id="dl-all-wrap" class="dl-all hidden">Todos los bins: <a class="link" id="dl-all-zip" href="#" download>.zip</a> · <a class="link" id="dl-all-3mf" href="#" download>.3mf</a></span>
-      <a class="btn" id="dl-3mf" href="#" download title="Un solo archivo con bin, inserto, tapa y divisores (cada pieza de un color)">⬇ 3MF</a>
-      <a class="btn primary" id="dl-zip" href="#" download>⬇ Download STLs (.zip)</a>
+      <div class="exp"><button class="btn primary" id="dl-menu-btn" type="button" aria-haspopup="true" aria-expanded="false">⬇ Exportar ▾</button>
+        <div class="exp-menu hidden" id="dl-menu" role="menu">
+          <a id="dl-zip" href="#" download role="menuitem">📦 STLs (.zip)</a>
+          <a id="dl-3mf" href="#" download role="menuitem" title="Un solo archivo con bin, inserto, tapa y divisores (cada pieza de un color)">🧩 3MF con colores</a>
+          <a id="dl-svg" href="#" download role="menuitem">✏️ Contorno (.svg)</a>
+          <div id="dl-all-wrap" class="hidden"><hr><span class="muted">Todos los bins</span><a id="dl-all-zip" href="#" download role="menuitem">📦 .zip</a><a id="dl-all-3mf" href="#" download role="menuitem">🧩 .3mf</a></div>
+        </div></div>
     </div>
 
     <div class="ed-tabs card bin-tabs" id="bin-tabs" aria-label="Bins del proyecto"></div>
@@ -201,8 +205,8 @@
       </div>
 
       <aside class="card settings">
-        <div class="card-h">Bin Settings <span class="grow"></span><button class="link" id="s-reset">Reset</button></div>
-        <h3 class="sec">Size</h3>
+        <div class="card-h">Bin Settings <span class="grow"></span><button class="link" id="s-acc-all" title="Expandir / contraer todas las secciones" aria-label="Expandir o contraer todo">⇕</button><button class="link" id="s-reset">Reset</button></div>
+        <details class="acc" data-acc="size"><summary><span class="ico" aria-hidden="true">📐</span><b>Size</b><small class="sum" id="sum-size"></small></summary><div class="acc-b">
         <label class="sw"><span>Auto size</span><input type="checkbox" id="s-auto"><i></i></label>
         <label class="sw"><span>Partial bin</span><input type="checkbox" id="s-partial"><i></i></label>
         <div id="s-cells-wrap" hidden>
@@ -217,7 +221,8 @@
         </div>
         <label>Grid unit size (mm)<input type="number" id="s-unit" min="20" max="80" step="0.5"></label>
 
-        <h3 class="sec">Pocket</h3>
+        </div></details>
+        <details class="acc" data-acc="pocket"><summary><span class="ico" aria-hidden="true">🕳️</span><b>Pocket</b><small class="sum" id="sum-pocket"></small></summary><div class="acc-b">
         <label>Depth (mm)<input type="number" id="s-depth" min="1" max="80" step="0.5"></label>
         <label>Clearance around shape (mm)<input type="number" id="s-clr" min="0" max="5" step="0.1"></label>
         <label class="sw"><span>Pocket chamfer</span><input type="checkbox" id="s-chamfer"><i></i></label>
@@ -227,15 +232,8 @@
           <label>Fit clearance (mm)<input type="number" id="s-ifit" min="0" max="1" step="0.05"></label>
         </div>
 
-        <h3 class="sec">Structure</h3>
-        <label>Wall thickness (mm)<input type="number" id="s-wall" min="0.8" max="6" step="0.1"></label>
-        <label class="sw"><span>Stacking lip</span><input type="checkbox" id="s-lip"><i></i></label>
-        <label class="sw"><span>Magnet holes</span><input type="checkbox" id="s-mag"><i></i></label>
-        <div class="duo">
-          <label>Ø magnet (mm)<input type="number" id="s-md" min="4" max="8.2" step="0.1"></label>
-          <label>Depth (mm)<input type="number" id="s-mdep" min="1" max="4" step="0.1"></label>
-        </div>
-        <h3 class="sec">Loose dividers</h3>
+        </div></details>
+        <details class="acc" data-acc="dividers"><summary><span class="ico" aria-hidden="true">▦</span><b>Dividers</b><small class="sum" id="sum-dividers"></small></summary><div class="acc-b">
         <p class="muted"><b>Sueltos:</b> láminas que se insertan desde arriba en ranuras del bin (se imprimen tumbadas, en un STL aparte; donde se cruzan una vertical y una horizontal encajan por muescas a media altura). <b>Integrados:</b> paredes impresas junto con el bin. Son útiles en un <b>contenedor vacío</b> (bin sin siluetas: menú + de la barra Bins → <i>Contenedor vacío</i>) para repartir tornillos u otras piezas sueltas.</p>
         <label>Mode<select id="s-dmode"><option value="loose">Sueltos (piezas aparte con ranuras)</option><option value="fixed">Integrados en el bin (se imprimen con él)</option></select></label>
         <div class="duo">
@@ -249,13 +247,17 @@
           <label>Slot clearance (mm)<input type="number" id="s-dcl" min="0" max="0.6" step="0.05"></label>
         </div>
         <label>Slot depth into wall (mm)<input type="number" id="s-dsd" min="0" max="3" step="0.1"></label>
-        <h3 class="sec">Printer</h3>
+        </div></details>
+        <details class="acc" data-acc="structure"><summary><span class="ico" aria-hidden="true">🧱</span><b>Structure</b><small class="sum" id="sum-structure"></small></summary><div class="acc-b">
+        <label>Wall thickness (mm)<input type="number" id="s-wall" min="0.8" max="6" step="0.1"></label>
+        <label class="sw"><span>Stacking lip</span><input type="checkbox" id="s-lip"><i></i></label>
+        <label class="sw"><span>Magnet holes</span><input type="checkbox" id="s-mag"><i></i></label>
         <div class="duo">
-          <label>Bed X (mm)<input type="number" id="s-bedx" min="50" max="1000" step="1"></label>
-          <label>Bed Y (mm)<input type="number" id="s-bedy" min="50" max="1000" step="1"></label>
+          <label>Ø magnet (mm)<input type="number" id="s-md" min="4" max="8.2" step="0.1"></label>
+          <label>Depth (mm)<input type="number" id="s-mdep" min="1" max="4" step="0.1"></label>
         </div>
-        <label>Nozzle (mm)<input type="number" id="s-nozzle" min="0.2" max="1.2" step="0.1"></label>
-        <h3 class="sec">Hollow &amp; lid</h3>
+        </div></details>
+        <details class="acc" data-acc="hollow"><summary><span class="ico" aria-hidden="true">📦</span><b>Hollow & lid</b><small class="sum" id="sum-hollow"></small></summary><div class="acc-b">
         <label class="sw"><span>Hollow bin (saves material)</span><input type="checkbox" id="s-hollow"><i></i></label>
         <div class="duo">
           <label>Rib (mm)<input type="number" id="s-rib" min="1.2" max="6" step="0.1"></label>
@@ -267,8 +269,15 @@
         </div>
         <label>Lid clearance (mm)<input type="number" id="s-lidc" min="0" max="0.6" step="0.05"></label>
         <p class="muted" id="s-hollow-info">El bin se imprime abierto por arriba (sin soportes) y la tapa lo cierra: se asienta en la grada de las costillas y de la pared (reborde junto a cada bolsillo). Seat = ancho de la grada.</p>
-        <a class="link dl-extra" id="dl-svg" href="#" download>Descargar contorno SVG</a>
-      </aside>
+      </div></details>
+        <details class="acc" data-acc="printer"><summary><span class="ico" aria-hidden="true">🖨️</span><b>Printer</b><small class="sum" id="sum-printer"></small></summary><div class="acc-b">
+        <div class="duo">
+          <label>Bed X (mm)<input type="number" id="s-bedx" min="50" max="1000" step="1"></label>
+          <label>Bed Y (mm)<input type="number" id="s-bedy" min="50" max="1000" step="1"></label>
+        </div>
+        <label>Nozzle (mm)<input type="number" id="s-nozzle" min="0.2" max="1.2" step="0.1"></label>
+        </div></details>
+        </aside>
     </div>
   </section>
 </main>

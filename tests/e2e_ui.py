@@ -25,6 +25,7 @@ try:
         pg.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         pg.on("pageerror", lambda e: errors.append(str(e)))
         pg.on("response", lambda r: failed.append((r.status, r.url.replace(f"http://127.0.0.1:{PORT}", ""))) if r.status >= 400 else None)
+        pg.add_init_script("try { if (!sessionStorage.getItem('e2e')) { localStorage.setItem('twin.acc', '\"all\"'); sessionStorage.setItem('e2e', '1'); } } catch (e) {}")
         pg.goto(f"http://127.0.0.1:{PORT}/")
         check("home visible", pg.is_visible("#view-home") and pg.inner_text("h1").startswith("De foto"))
         pg.screenshot(path=f"{SHOTS}/1_home.png")
@@ -295,6 +296,7 @@ try:
         pg.screenshot(path=f"{SHOTS}/5_editor_final.png")
 
         # descargas
+        pg.click("#dl-menu-btn")
         with pg.expect_download() as d1: pg.click("#dl-zip")
         f1 = d1.value
         import zipfile
@@ -302,6 +304,7 @@ try:
         names = sorted(zf.namelist())
         check("descarga ZIP con bin + inserto", len(names) == 2 and names[0].endswith("_bin.stl") and names[1].endswith("_insert.stl"), f"{f1.suggested_filename} {names}")
         check("STL binario válido en el zip", len(zf.read(names[0])) > 50000 and not zf.read(names[0])[:5] == b"solid")
+        pg.click("#dl-menu-btn")
         with pg.expect_download() as d2: pg.click("#dl-svg")
         check("descarga SVG", open(d2.value.path()).read().startswith("<svg"), d2.value.suggested_filename)
 
@@ -411,6 +414,17 @@ try:
 
         # ---- v1.3: divisores, compartimentos, biblioteca, varios bins, 3MF
         pg.on("dialog", lambda d: d.accept())
+        # ajustes plegables + menu Exportar
+        check("ajustes: 6 secciones con icono y resumen", pg.locator("details.acc").count() == 6 and "×" in pg.inner_text("#sum-size") and pg.inner_text("#sum-dividers") == "ninguno", pg.inner_text("#sum-size"))
+        pg.click("#s-acc-all")
+        check("ajustes: contraer todo", pg.locator("details.acc[open]").count() == 0 and pg.evaluate("localStorage.getItem('twin.acc')") == "[]")
+        pg.click("details.acc[data-acc=pocket] summary")
+        check("ajustes: abrir una seccion muestra sus campos", pg.is_visible("#s-depth") and pg.is_hidden("#s-wall"))
+        pg.click("#s-acc-all"); pg.click("#s-acc-all") if pg.locator("details.acc[open]").count() < 6 else None
+        check("ajustes: expandir todo", pg.locator("details.acc[open]").count() == 6)
+        check("exportar: menu cerrado al inicio", pg.is_hidden("#dl-menu"))
+        pg.click("#dl-menu-btn"); check("exportar: el menu ofrece STL, 3MF y SVG", pg.is_visible("#dl-zip") and pg.is_visible("#dl-3mf") and pg.is_visible("#dl-svg"))
+        pg.keyboard.press("Escape"); check("exportar: Esc cierra el menu", pg.is_hidden("#dl-menu"))
         J("window.__orig = JSON.stringify(D().shapes)")
         pg.fill("#s-dxn", "2"); pg.press("#s-dxn", "Tab")
         check("divisores: 2 posiciones X calculadas", J("return CFG().dividers_x.length") == 2 and pg.input_value("#s-dxs").count(",") == 1, pg.input_value("#s-dxs"))
@@ -463,7 +477,7 @@ try:
         J("D().shapes[0].name = 'Solo en bin 2'; scheduleBuild(50)"); ready2()
         pg.click("#bin-tabs .tab[data-bin=b1] span"); pg.wait_for_function("document.querySelector('#bin-tabs .tab[data-bin=b1]').classList.contains('on')"); ready2()
         check("bins: el Bin 1 conserva sus formas (cambio del Bin 2 aislado)", J("return D().shapes[0].name") != "Solo en bin 2")
-        check("bins: enlaces de descarga por bin y para todos", "bin=b1" in pg.get_attribute("#dl-zip", "href") and "bin.3mf?bin=b1" in pg.get_attribute("#dl-3mf", "href") and pg.is_visible("#dl-all-wrap"))
+        check("bins: enlaces de descarga por bin y para todos", "bin=b1" in pg.get_attribute("#dl-zip", "href") and "bin.3mf?bin=b1" in pg.get_attribute("#dl-3mf", "href") and pg.evaluate("!document.querySelector('#dl-all-wrap').classList.contains('hidden')"))
         st3 = pg.evaluate("fetch(document.querySelector('#dl-3mf').href).then(async r => [r.status, (await r.arrayBuffer()).byteLength, r.headers.get('content-disposition')])")
         check("3MF: descarga correcta", st3[0] == 200 and st3[1] > 1000 and ".3mf" in st3[2], str(st3))
         pg.click("#bin-tabs .tab[data-bin=b2] span"); pg.wait_for_function("document.querySelector('#bin-tabs .tab[data-bin=b2]').classList.contains('on')"); ready2()
@@ -475,8 +489,7 @@ try:
         pg.locator("#s-partial").evaluate("el => el.click()"); pg.wait_for_selector("#s-cells .cellbtn"); J("CFG().cells_off = ['0,0']; renderSettings(); renderLayout(); scheduleBuild(50)"); ready2()
         off0 = J("return CFG().cells_off.slice()")
         pg.click("#bin-tabs .tab-plus"); pg.click(".menu >> text=Complemento del bin actual")
-        try: pg.wait_for_selector("#bin-tabs .tab[data-bin=b3].on", timeout=8000)
-        except Exception: print("DEBUG", pg.evaluate("JSON.stringify([window.__twin.bin, window.__twinfn.CFG().partial, window.__twinfn.CFG().cells_off, window.__twin.st.bins])"), pg.is_visible("#toast")); raise
+        pg.wait_for_selector("#bin-tabs .tab[data-bin=b3].on", timeout=8000)
         ready2()
         gw, gd = J("return [CFG().grid_width, CFG().grid_depth]")
         check("complemento: bin nuevo, parcial, vacio, celdas invertidas", J("return D().shapes.length") == 0 and J("return CFG().partial") and J("return CFG().cells_off.length") == gw * gd - len(off0) and not (set(J("return CFG().cells_off")) & set(off0)), str(off0))
