@@ -240,3 +240,19 @@ label.sw > input:focus-visible + i { outline: 2px solid var(--accent); outline-o
 
 .vbar #v-lid { width: auto; height: 36px; border-radius: 999px; padding: 0 14px; font-size: 13px; white-space: nowrap; margin-left: 6px; }
 .settings .muted { font-size: 12.5px; line-height: 1.4; margin: 10px 0 0; }
+
+.cells { display: grid; gap: 4px; margin: 6px 0 10px; }
+.cellbtn { padding: 6px 0; border: 1px solid #cfcdc8; border-radius: 6px; background: #f2f2f1; color: #8a8a86; font-size: 12px; cursor: pointer; }
+.cellbtn.on { background: #1d1d1f; color: #fff; border-color: #1d1d1f; }
+.cell-off { fill: #e4e2dd; fill-opacity: .92; stroke: #b9b6ae; stroke-width: 1px; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+
+.checks-h { margin: 10px 0 4px; font-size: 12px; font-weight: 600; color: #444; }
+.checks { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.checks li { padding: 4px 8px; margin: 3px 0; border-radius: 6px; background: #f2f2f1; color: #555; }
+.checks li.warn { background: #fff1e0; color: #8a4b00; }
+.checks li.click { cursor: pointer; }
+.checks li.click:hover { filter: brightness(.96); }
+
+.alignbar { margin-top: 8px; padding-top: 8px; gap: 6px; }
+.alignbar button { padding: 6px 11px; }
+.alignbar .lbl { font-size: 12px; color: #6b6b70; }

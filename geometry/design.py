@@ -9,6 +9,7 @@ Solo al construir la geometria 3D se voltea Y (Gridfinity usa Y hacia arriba).
 from __future__ import annotations
 
 import math
+import shapely
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -20,7 +21,7 @@ from shapely.ops import unary_union
 from manifold3d import CrossSection, FillRule
 
 from .gridfinity import (BIN_GAP, CORNER_R, FOOT_H, FOOT_PROFILE, HEIGHT_UNIT, LIP_H, cylinder, extrude_poly, lip_ring,
-                         loft_rrect, make_shell, rounded_rect)
+                         loft_rrect, make_shell, rounded_rect, footprint_poly, lip_ring_poly)
 
 DEFAULT_SETTINGS = {
     "auto_size": True, "grid_width": 4, "grid_depth": 4, "height_units": 3, "grid_unit_mm": 42.0,
@@ -28,6 +29,8 @@ DEFAULT_SETTINGS = {
     "contrast_insert": True, "insert_thickness_mm": 0.4, "fit_clearance_mm": 0.2,
     "wall_thickness_mm": 1.6, "stacking_lip": True,
     "magnet_holes": False, "magnet_diameter_mm": 6.5, "magnet_depth_mm": 2.4,
+    "partial": False, "cells_off": [],
+    "bed_x_mm": 256.0, "bed_y_mm": 256.0, "nozzle_mm": 0.4,
     "hollow": False, "hollow_rib_mm": 2.4, "hollow_floor_mm": 1.2,
     "lid_thickness_mm": 1.2, "lid_ledge_mm": 0.8, "lid_clearance_mm": 0.2,
 }
@@ -48,6 +51,7 @@ class DesignResult:
     problems: dict = field(default_factory=dict)   # id de forma -> ["overlap" | "outside"]
     lid: Manifold | None = None                    # tapa (modo hueco), plana sobre z=0
     stats: dict = field(default_factory=dict)      # volumenes en cm3 (macizo / hueco / tapa)
+    checks: list = field(default_factory=list)     # chequeo de imprimibilidad: {level, code, msg, shapes}
 
 
 # ---------------------------------------------------------------- geometria de una forma
@@ -160,7 +164,7 @@ def _poly_union(items):
     return g.buffer(0) if not g.is_valid else g
 
 
-def _hollow_parts(nw, nd, u, H, zone, pk_all, S, c_chamfer):
+def _hollow_parts(nw, nd, u, H, zone, pk_all, S, c_chamfer, cells=None, fp=None):
     """Cavidades del modo hueco (se restan junto con los bolsillos).
 
     Abierto por ARRIBA: sin puentes ni soportes al imprimir. Alrededor de cada bolsillo queda una costilla de
@@ -175,9 +179,11 @@ def _hollow_parts(nw, nd, u, H, zone, pk_all, S, c_chamfer):
     r_in = 2.65 if S["stacking_lip"] else wall   # 0.05 mm dentro del labio: evita aristas coincidentes con el anillo
     l_out = max(0.0, S["lid_ledge_mm"])
     def _zone(inset):
+        if fp is not None:
+            return shapely.set_precision(fp.buffer(-inset, 14).buffer(0).simplify(0.005), 1e-4)
         return Polygon(rounded_rect(nw * u - BIN_GAP - 2 * inset, nd * u - BIN_GAP - 2 * inset, max(CORNER_R - inset, 0.5))).buffer(0)
     zone_ext = _zone(r_in)
-    zone = _zone(r_in + l_out)
+    zone = _zone(r_in + l_out + (0.03 if fp is not None else 0.0))   # parcial: evita aristas casi coincidentes con las copas
     z_body = FOOT_H + bf                                          # suelo de la cavidad del cuerpo
     A = zone.difference(pk_all.buffer(rib, 12))
     A = A.buffer(-0.5, 4).buffer(0.5, 4).simplify(0.03)           # quita rendijas < 1 mm (mallas degeneradas)
@@ -190,8 +196,9 @@ def _hollow_parts(nw, nd, u, H, zone, pk_all, S, c_chamfer):
     # copas de los pies: contorno del pie recortado `rib`, abiertas hacia el cuerpo
     cups = []
     fw = rib
-    for i in range(nw):
-        for j in range(nd):
+    inc = [(i, j) for i in range(nw) for j in range(nd) if cells is None or (i, j) in cells]
+    for i, j in inc:
+        if True:
             cx, cy = round((i - (nw - 1) / 2) * u, 4), round((j - (nd - 1) / 2) * u, 4)
             z, off = 0.0, -round(sum(dx for _, dx in FOOT_PROFILE), 4)
             for h, dx in FOOT_PROFILE:
@@ -209,13 +216,48 @@ def _hollow_parts(nw, nd, u, H, zone, pk_all, S, c_chamfer):
     if S["magnet_holes"]:
         bosses = [cylinder((i - (nw - 1) / 2) * u + sx * (u / 2 - 8.0), (j - (nd - 1) / 2) * u + sy * (u / 2 - 8.0),
                            -1.0, z_body + 1.0, S["magnet_diameter_mm"] + 2 * rib)
-                  for i in range(nw) for j in range(nd) for sx in (-1, 1) for sy in (-1, 1)]
+                  for i, j in inc for sx in (-1, 1) for sy in (-1, 1)]
         cup = cup - Manifold.batch_boolean(bosses, 0)
     parts.append(cup)
     # rebaje de la tapa (toda la zona util + escalon sobre la pared exterior)
     seat = zone_ext.difference(pk_all.buffer(rim, 12)).buffer(-0.05, 4).buffer(0.05, 4).simplify(0.03)
     parts.append(extrude_poly(seat, H - lid_t, H + 1.0))
     return [p for p in parts if p is not None], zone_ext, lid_t, l_out, rim
+
+
+def _printability(items, S, W, D, H, lid_t, hollow, stats, lid, warns_n):
+    """Chequeos de imprimibilidad. level: 'warn' (probable fallo) | 'info'."""
+    out = []
+    nz = float(S["nozzle_mm"])
+    min_wall = 2 * nz
+    bx, by = float(S["bed_x_mm"]), float(S["bed_y_mm"])
+    if not ((W <= bx and D <= by) or (W <= by and D <= bx)):
+        out.append({"level": "warn", "code": "bed", "shapes": [],
+                    "msg": f"el bin ({W:.0f} × {D:.0f} mm) no cabe en la cama ({bx:.0f} × {by:.0f} mm): reduce la rejilla o activa Partial Bin"})
+    if S["wall_thickness_mm"] < min_wall:
+        out.append({"level": "warn", "code": "outer_wall", "shapes": [],
+                    "msg": f"la pared exterior ({S['wall_thickness_mm']:.1f} mm) es menor que 2 pasadas de boquilla ({min_wall:.1f} mm)"})
+    thin = {}
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            d = items[i]["full"].distance(items[j]["full"])
+            if 0 < d < min_wall:
+                thin[(items[i]["id"], items[j]["id"])] = d
+    for (a, b), d in sorted(thin.items()):
+        out.append({"level": "warn", "code": "thin_wall", "shapes": [a, b],
+                    "msg": f"solo {d:.2f} mm de material entre '{a}' y '{b}' (minimo {min_wall:.1f} mm): sepáralas o reduce la holgura"})
+    for it in items:
+        if it["pocket"].buffer(-nz / 2).is_empty:
+            out.append({"level": "warn", "code": "narrow", "shapes": [it["id"]],
+                        "msg": f"el bolsillo '{it['id']}' es mas angosto que la boquilla"})
+    if hollow:
+        rib = S["hollow_rib_mm"]
+        if rib < min_wall + 0.4:
+            out.append({"level": "warn", "code": "rib", "shapes": [],
+                        "msg": f"costilla de {rib:.1f} mm: con boquilla de {nz:.1f} mm queda de solo {int(rib // nz)} pasadas"})
+        if lid is not None and (W > bx and W > by or D > bx and D > by):
+            out.append({"level": "warn", "code": "lid_bed", "shapes": [], "msg": "la tapa no cabe en la cama"})
+    return out
 
 
 def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult:
@@ -250,7 +292,26 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
                 problems.setdefault(items[j]["id"], set()).add("overlap")
     allu = unary_union([it["full"] for it in items])
 
+    partial = bool(S["partial"])
+    cells_off = set()
+    for t in S.get("cells_off") or []:
+        try:
+            a, b = str(t).split(",")
+            cells_off.add((int(a), int(b)))
+        except ValueError:
+            pass
+    if partial:
+        S["auto_size"] = False                      # las celdas se numeran desde la esquina: la rejilla debe ser fija
+
+    def _cells(nw_, nd_):
+        return {(i, j) for i in range(nw_) for j in range(nd_) if (i, j) not in cells_off} if partial else None
+
     def inner_zone(nw_, nd_):
+        if partial:
+            cs = _cells(nw_, nd_)
+            if not cs:
+                raise ValueError("el bin parcial necesita al menos una celda activa")
+            return footprint_poly(cs, nw_, nd_, u).buffer(-wall, 12).buffer(1e-6)
         return Polygon(rounded_rect(nw_ * u - BIN_GAP - 2 * wall, nd_ * u - BIN_GAP - 2 * wall,
                                     max(CORNER_R - wall, 0.5))).buffer(1e-6)
 
@@ -276,7 +337,12 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
     if any("overlap" in v for v in problems.values()):
         warns.append("hay formas que se solapan")
 
-    solid = make_shell(nw, nd, u, H, S["magnet_holes"], S["magnet_diameter_mm"], S["magnet_depth_mm"])
+    cells = _cells(nw, nd)
+    if partial and not cells:
+        raise ValueError("el bin parcial necesita al menos una celda activa")
+    is_partial = cells is not None and len(cells) < nw * nd
+    fp = footprint_poly(cells, nw, nd, u) if is_partial else None
+    solid = make_shell(nw, nd, u, H, S["magnet_holes"], S["magnet_diameter_mm"], S["magnet_depth_mm"], cells if is_partial else None)
 
     # --- bolsillos agrupados por profundidad
     ins = S["insert_thickness_mm"] if S["contrast_insert"] else 0.0
@@ -326,7 +392,7 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
     stats = {}
     if hollow:
         pk_all = _poly_union([it["full"] for it in items])
-        hparts, zone_ext, lid_t, l_out, rim = _hollow_parts(nw, nd, u, H, zone, pk_all, S, c)
+        hparts, zone_ext, lid_t, l_out, rim = _hollow_parts(nw, nd, u, H, zone, pk_all, S, c, cells if is_partial else None, fp)
         if hparts:
             stats["lid_z"] = round(H - lid_t, 3)
             stats["solid_cm3"] = round((solid - Manifold.batch_boolean(cutters, 0)).volume() / 1000, 2)
@@ -344,7 +410,7 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
 
     total_h = H
     if S["stacking_lip"]:
-        solid = solid + lip_ring(W, D, H)
+        solid = solid + (lip_ring_poly(fp, H) if is_partial else lip_ring(W, D, H))
         total_h = H + LIP_H
     if solid.is_empty():
         raise ValueError("el bin quedo vacio: reduce el grosor de pared / costilla o aumenta la rejilla")
@@ -353,5 +419,6 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
         warns.append("la tapa quedo vacia (la zona es demasiado estrecha): ajusta asiento o holgura")
     insert = Manifold.batch_boolean([m for m in inserts if m is not None], 0) if inserts else None
 
+    checks = _printability(items, S, W, D, H, S["lid_thickness_mm"], hollow, stats, lid, len(warns))
     return DesignResult(solid, insert, (nw, nd), (W, D), total_h, pockets_all, warns,
-                        {k: sorted(v) for k, v in problems.items()}, lid, stats)
+                        {k: sorted(v) for k, v in problems.items()}, lid, stats, checks)

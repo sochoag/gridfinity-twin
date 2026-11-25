@@ -28,6 +28,7 @@ FOOT_PROFILE = [(0.8, 0.8), (1.8, 0.0), (2.15, 2.15)]  # (alto, desplazamiento h
 CORNER_R = 3.75
 LIP_H = 4.4
 SEAM_EPS = 0.002   # el cuerpo es 2 um mas chico que el borde del pie: evita bordes exactamente coincidentes
+PARTIAL_EPS = 0.015   # bin parcial: el cuerpo es 15 um mas chico que el borde de los pies (las esquinas se aproximan distinto)
 LIP_TOP_FLAT = 0.2 # el labio termina con 0.2 mm de plano en vez de un filo de 0 mm
 
 
@@ -142,27 +143,47 @@ def finger_notch_polys(polys, mode, diameter):
     return out
 
 
-def make_shell(nw, nd, u, H, magnet_holes=False, magnet_d=6.5, magnet_depth=2.4):
-    """Pies + cuerpo (+ agujeros de imanes) de un bin de nw x nd celdas y altura de cuerpo H."""
+def cell_center(i, j, nw, nd, u):
+    return (i - (nw - 1) / 2) * u, (j - (nd - 1) / 2) * u
+
+
+def footprint_poly(cells, nw, nd, u):
+    """Huella de un bin parcial: union de las celdas incluidas, con el hueco de 0.25 mm por lado y esquinas redondeadas."""
+    from shapely.geometry import box
+    sq = [box(cx - u / 2, cy - u / 2, cx + u / 2, cy + u / 2) for cx, cy in (cell_center(i, j, nw, nd, u) for i, j in sorted(cells))]
+    fp = unary_union(sq).buffer(-BIN_GAP / 2, join_style=2)
+    fp = fp.buffer(-CORNER_R, 16).buffer(CORNER_R, 16)          # redondea las esquinas convexas
+    fp = fp.buffer(1.0, 8).buffer(-1.0, 8)                       # y suaviza las concavas
+    return fp.simplify(0.01)
+
+
+def make_shell(nw, nd, u, H, magnet_holes=False, magnet_d=6.5, magnet_depth=2.4, cells=None):
+    """Pies + cuerpo (+ agujeros de imanes) de un bin de nw x nd celdas y altura de cuerpo H.
+
+    `cells`: conjunto de (i, j) incluidas (bin parcial); None = todas."""
     W, D = nw * u - BIN_GAP, nd * u - BIN_GAP
+    inc = [(i, j) for i in range(nw) for j in range(nd) if cells is None or (i, j) in cells]
     feet = []
-    for i in range(nw):
-        for j in range(nd):
-            cx, cy = (i - (nw - 1) / 2) * u, (j - (nd - 1) / 2) * u
-            z, off = 0.0, -round(sum(dx for _, dx in FOOT_PROFILE), 4)
-            for h, dx in FOOT_PROFILE:
-                feet.append(loft_rrect(u - BIN_GAP, u - BIN_GAP, CORNER_R, z, round(z + h, 4), off,
-                                       round(off + dx, 4)).translate((round(cx, 4), round(cy, 4), 0)))
-                z = round(z + h, 4)
-                off = round(off + dx, 4)
+    for i, j in inc:
+        cx, cy = cell_center(i, j, nw, nd, u)
+        z, off = 0.0, -round(sum(dx for _, dx in FOOT_PROFILE), 4)
+        for h, dx in FOOT_PROFILE:
+            feet.append(loft_rrect(u - BIN_GAP, u - BIN_GAP, CORNER_R, z, round(z + h, 4), off,
+                                   round(off + dx, 4)).translate((round(cx, 4), round(cy, 4), 0)))
+            z = round(z + h, 4)
+            off = round(off + dx, 4)
     base = Manifold.batch_boolean(feet, 0)
-    body = Manifold.extrude(CrossSection([rounded_rect(W - 2 * SEAM_EPS, D - 2 * SEAM_EPS, CORNER_R - SEAM_EPS)], FillRule.EvenOdd),
-                            round(H - FOOT_H, 4)).translate((0, 0, FOOT_H))
+    if cells is None or len(inc) == nw * nd:
+        body = Manifold.extrude(CrossSection([rounded_rect(W - 2 * SEAM_EPS, D - 2 * SEAM_EPS, CORNER_R - SEAM_EPS)], FillRule.EvenOdd),
+                                round(H - FOOT_H, 4)).translate((0, 0, FOOT_H))
+    else:
+        body = extrude_poly(footprint_poly(cells, nw, nd, u).buffer(-PARTIAL_EPS, 8), FOOT_H, H)
     solid = base + body
     if magnet_holes:
-        mags = [cylinder((i - (nw - 1) / 2) * u + sx * (u / 2 - 8.0), (j - (nd - 1) / 2) * u + sy * (u / 2 - 8.0),
-                         -0.01, magnet_depth, magnet_d)
-                for i in range(nw) for j in range(nd) for sx in (-1, 1) for sy in (-1, 1)]
+        mags = []
+        for i, j in inc:
+            cx, cy = cell_center(i, j, nw, nd, u)
+            mags += [cylinder(cx + sx * (u / 2 - 8.0), cy + sy * (u / 2 - 8.0), -0.01, magnet_depth, magnet_d) for sx in (-1, 1) for sy in (-1, 1)]
         solid = solid - Manifold.batch_boolean(mags, 0)
     return solid
 
@@ -175,6 +196,21 @@ def lip_ring(W, D, H):
         cav.append(loft_rrect(W, D, CORNER_R, H + z, H + round(z + h, 4), off0, off1))
         z = round(z + h, 4)
     return ring_outer - Manifold.batch_boolean(cav, 0)
+
+
+def lip_ring_poly(fp, H, step=0.2):
+    """Anillo del stacking lip sobre una huella arbitraria (bin parcial): el chaflan se aproxima con escalones de 0.2 mm."""
+    fp = fp.buffer(-PARTIAL_EPS, 8)
+    ring_outer = extrude_poly(fp, H, H + LIP_H)
+    cav, z = [], 0.0
+    for h, off0, off1 in [(1.9, -2.6, -0.7), (1.8, -0.7, -0.7), (0.7, -0.7, -LIP_TOP_FLAT)]:
+        n = max(1, round(h / step)) if off0 != off1 else 1
+        for k in range(n):
+            za, zb = z + h * k / n, z + h * (k + 1) / n
+            inset = -(off0 + (off1 - off0) * (k + 0.5) / n)
+            cav.append(extrude_poly(fp.buffer(-inset, 12), round(H + za, 4), round(H + zb, 4)))
+        z = round(z + h, 4)
+    return ring_outer - Manifold.batch_boolean([c for c in cav if c is not None], 0)
 
 
 # ---------------------------------------------------------------- generador

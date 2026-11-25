@@ -181,6 +181,11 @@ class SettingsIn(BaseModel):
     magnet_holes: bool = False
     magnet_diameter_mm: float = Field(6.5, ge=4, le=8.2)
     magnet_depth_mm: float = Field(2.4, ge=1, le=4)
+    partial: bool = False
+    cells_off: list[str] = Field(default_factory=list, max_length=144)
+    bed_x_mm: float = Field(256.0, ge=50, le=1000)
+    bed_y_mm: float = Field(256.0, ge=50, le=1000)
+    nozzle_mm: float = Field(0.4, ge=0.2, le=1.2)
     hollow: bool = False
     hollow_rib_mm: float = Field(2.4, ge=1.2, le=6)
     hollow_floor_mm: float = Field(1.2, ge=0.8, le=4)
@@ -423,11 +428,15 @@ def design_build(sid: str, body: DesignIn):
                 lid.unlink()
     except ValueError as e:
         raise HTTPException(422, str(e))
+    vol = sum((m or {}).get("volume_cm3") or 0 for m in (chk, ichk, lchk))
+    if vol:
+        r.checks.append({"level": "info", "code": "weight", "shapes": [],
+                         "msg": f"≈ {vol * 1.24:.0f} g de PLA con relleno 100 % ({vol:.0f} cm³ en total)" + ("" if S["hollow"] else ": con Hollow bin gastas menos")})
     pockets_to_svg(r.pockets, str(d / "bin.svg"))
     meta = {"grid": list(r.grid), "size_mm": [round(r.size_mm[0], 1), round(r.size_mm[1], 1)],
             "total_height_mm": round(r.total_height_mm, 1), "warnings": r.warnings, "problems": r.problems,
             "mesh": chk, "insert": ichk, "has_insert": r.insert is not None,
-            "lid": lchk, "has_lid": r.lid is not None, "stats": r.stats,
+            "lid": lchk, "has_lid": r.lid is not None, "stats": r.stats, "checks": r.checks,
             "build_seconds": round(time.time() - t0, 2), "stamp": int(time.time() * 1000)}
     st["design"], st["bin_meta"] = {"settings": S, "shapes": shapes}, meta
     write_state(d, st)

@@ -112,7 +112,7 @@
 
     <div class="ed-grid">
       <div class="card ed-layout">
-        <div class="card-h">2D Layout <span class="grow"></span><button class="link" id="btn-arrange" title="Reordenar todas las formas automáticamente">Auto-arrange</button></div>
+        <div class="card-h">2D Layout <span class="grow"></span><button class="link" id="btn-undo" title="Deshacer (Ctrl+Z)" aria-label="Deshacer">↶ Undo</button><button class="link" id="btn-redo" title="Rehacer (Ctrl+Shift+Z)" aria-label="Rehacer">↷ Redo</button><button class="link" id="btn-arrange" title="Reordenar todas las formas automáticamente">Auto-arrange</button></div>
         <div class="lay-wrap"><svg id="lay-svg" tabindex="0" preserveAspectRatio="xMidYMid meet" aria-label="Disposición 2D"></svg></div>
         <div class="toolbar" id="toolbar">
           <button data-tool="rotate" title="Girar 90°">↻ Rotate</button>
@@ -123,6 +123,18 @@
           <span class="grow"></span>
           <button data-tool="delete" class="tb-danger" title="Eliminar forma" aria-label="Eliminar forma">🗑</button>
           <button data-tool="done" class="tb-ok" title="Terminar (deseleccionar)" aria-label="Listo">✓</button>
+        </div>
+        <div class="toolbar alignbar" id="alignbar" title="Alinear y distribuir (Shift+clic para seleccionar varias formas)">
+          <span class="lbl">Align</span>
+          <button data-al="left" title="Alinear a la izquierda" aria-label="Izquierda">⇤</button>
+          <button data-al="hc" title="Centrar horizontalmente" aria-label="Centro horizontal">↔</button>
+          <button data-al="right" title="Alinear a la derecha" aria-label="Derecha">⇥</button>
+          <button data-al="top" title="Alinear arriba" aria-label="Arriba">⤒</button>
+          <button data-al="vc" title="Centrar verticalmente" aria-label="Centro vertical">↕</button>
+          <button data-al="bottom" title="Alinear abajo" aria-label="Abajo">⤓</button>
+          <button data-al="dh" title="Distribuir horizontalmente (3+ formas)" aria-label="Distribuir horizontal">⇹ H</button>
+          <button data-al="dv" title="Distribuir verticalmente (3+ formas)" aria-label="Distribuir vertical">⇳ V</button>
+          <span class="muted" id="alignbar-n"></span>
         </div>
         <div id="pop" class="pop hidden"></div>
       </div>
@@ -142,12 +154,19 @@
         </div>
         <div id="bin-info" class="info"></div>
         <ul id="bin-warn" class="warn"></ul>
+        <h4 class="checks-h" id="checks-h">Printability</h4>
+        <ul id="checks" class="checks"></ul>
       </div>
 
       <aside class="card settings">
         <div class="card-h">Bin Settings <span class="grow"></span><button class="link" id="s-reset">Reset</button></div>
         <h3 class="sec">Size</h3>
         <label class="sw"><span>Auto size</span><input type="checkbox" id="s-auto"><i></i></label>
+        <label class="sw"><span>Partial bin</span><input type="checkbox" id="s-partial"><i></i></label>
+        <div id="s-cells-wrap" hidden>
+          <p class="muted">Included cells: pulsa para activar o desactivar cada celda (los pies y el cuerpo solo se generan en las activas).</p>
+          <div id="s-cells" class="cells"></div>
+        </div>
         <div class="trio">
           <div><span class="lbl">Width (grid)</span><div class="stepper"><input type="number" id="s-gw" min="1" max="12" step="1"><button data-step="s-gw" data-d="-1">−</button><button data-step="s-gw" data-d="1">+</button></div><small id="s-gw-mm"></small></div>
           <div><span class="lbl">Depth (grid)</span><div class="stepper"><input type="number" id="s-gd" min="1" max="12" step="1"><button data-step="s-gd" data-d="-1">−</button><button data-step="s-gd" data-d="1">+</button></div><small id="s-gd-mm"></small></div>
@@ -173,6 +192,12 @@
           <label>Ø magnet (mm)<input type="number" id="s-md" min="4" max="8.2" step="0.1"></label>
           <label>Depth (mm)<input type="number" id="s-mdep" min="1" max="4" step="0.1"></label>
         </div>
+        <h3 class="sec">Printer</h3>
+        <div class="duo">
+          <label>Bed X (mm)<input type="number" id="s-bedx" min="50" max="1000" step="1"></label>
+          <label>Bed Y (mm)<input type="number" id="s-bedy" min="50" max="1000" step="1"></label>
+        </div>
+        <label>Nozzle (mm)<input type="number" id="s-nozzle" min="0.2" max="1.2" step="0.1"></label>
         <h3 class="sec">Hollow &amp; lid</h3>
         <label class="sw"><span>Hollow bin (saves material)</span><input type="checkbox" id="s-hollow"><i></i></label>
         <div class="duo">

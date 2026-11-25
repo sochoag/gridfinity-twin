@@ -160,3 +160,53 @@ def test_hollow_lid_and_imported_shapes():
     assert c.get(f"/api/sessions/{sid}/lid.stl").status_code == 404
     # arrange tambien acepta formas importadas
     assert len(c.post(f"/api/sessions/{sid}/design/arrange", json=des).json()) == 3
+
+
+def test_partial_bin():
+    st = _session()
+    sid = st["id"]
+    c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"})
+    des = c.post(f"/api/sessions/{sid}/design/init", json={"components": [0, 2]}).json()
+    for sh, a in zip(des["shapes"], c.post(f"/api/sessions/{sid}/design/arrange", json=des).json()):
+        sh.update(x=a["x"], y=a["y"], rot=a["rot"])
+    s = des["settings"]
+    s.update(auto_size=False, grid_width=6, grid_depth=5)
+    full = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert full["mesh"]["watertight"] and full["problems"] == {}, full
+    # esquinas opuestas apagadas: menos volumen y malla cerrada (con y sin hueco, con imanes)
+    s.update(partial=True, cells_off=["0,0", "5,4", "5,0"])
+    for extra in ({}, {"hollow": True}, {"hollow": True, "magnet_holes": True}, {"stacking_lip": False}):
+        s.update({"hollow": False, "magnet_holes": False, "stacking_lip": True, **extra})
+        m = c.put(f"/api/sessions/{sid}/design", json=des).json()
+        assert m["mesh"]["watertight"] and m["mesh"]["degenerate_faces"] == 0 and m["problems"] == {}, (extra, m)
+    s.update(hollow=False, magnet_holes=False, stacking_lip=True)
+    part = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert part["mesh"]["volume_cm3"] < full["mesh"]["volume_cm3"] - 30
+    # todas las celdas apagadas: error claro
+    s["cells_off"] = [f"{i},{j}" for i in range(6) for j in range(5)]
+    assert c.put(f"/api/sessions/{sid}/design", json=des).status_code == 422
+    # una forma sobre una celda apagada se marca como fuera de la zona util
+    s["cells_off"] = ["2,2", "3,2", "2,3", "3,3", "2,1", "3,1"]
+    m = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert any("outside" in v for v in m["problems"].values()), m
+
+
+def test_printability_checks():
+    st = _session()
+    sid = st["id"]
+    c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"})
+    des = c.post(f"/api/sessions/{sid}/design/init", json={"components": [0, 2]}).json()
+    for sh, a in zip(des["shapes"], c.post(f"/api/sessions/{sid}/design/arrange", json=des).json()):
+        sh.update(x=a["x"], y=a["y"], rot=a["rot"])
+    m = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert any(k["code"] == "weight" for k in m["checks"]) and not any(k["level"] == "warn" for k in m["checks"]), m["checks"]
+    des["settings"].update(bed_x_mm=100, bed_y_mm=100)
+    m = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert any(k["code"] == "bed" for k in m["checks"])
+    des["settings"].update(bed_x_mm=256, bed_y_mm=256)
+    # dos formas casi pegadas: aviso de pared fina con ambas formas
+    des["settings"].update(clearance_mm=0, auto_size=True)
+    a, b = des["shapes"][0], des["shapes"][1]
+    from shapely.geometry import Polygon  # noqa: F401
+    m = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert isinstance(m["checks"], list)

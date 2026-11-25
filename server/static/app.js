@@ -8,6 +8,7 @@ const JSON_HDR = { 'Content-Type': 'application/json' };
 
 const S = { st: null, sel: new Set(), paperName: 'A4', pw: 297, ph: 210, view: 'home', viewer: null, rectStamp: 0 };
 window.__twin = S; // útil para depurar desde la consola
+setTimeout(() => { window.__twinfn = { D, CFG, SHAPES, renderLayout, renderSettings, scheduleBuild, bboxOf, undo, redo }; });
 
 /* ------------------------------------------------------------------ utilidades */
 async function api(path, opts = {}) {
@@ -303,9 +304,10 @@ const DEFAULT_SETTINGS = {
   auto_size: true, grid_width: 4, grid_depth: 4, height_units: 3, grid_unit_mm: 42, pocket_depth_mm: 12, pocket_chamfer: true,
   chamfer_mm: 1, clearance_mm: 1, contrast_insert: true, insert_thickness_mm: 0.4, fit_clearance_mm: 0.2, wall_thickness_mm: 1.6,
   stacking_lip: true, magnet_holes: false, magnet_diameter_mm: 6.5, magnet_depth_mm: 2.4,
+  partial: false, cells_off: [], bed_x_mm: 256, bed_y_mm: 256, nozzle_mm: 0.4,
   hollow: false, hollow_rib_mm: 2.4, hollow_floor_mm: 1.2, lid_thickness_mm: 1.2, lid_ledge_mm: 0.8, lid_clearance_mm: 0.2,
 };
-const E = { sel: null, tool: null, pts: false, building: false, pending: false, timer: 0, meta: null, drag: null, menu: null };
+const E = { multi: new Set(), sel: null, tool: null, pts: false, building: false, pending: false, timer: 0, meta: null, drag: null, menu: null };
 const D = () => S.st.design;
 const CFG = () => D().settings;
 const SHAPES = () => D().shapes;
@@ -391,7 +393,41 @@ function setStatus(kind, text) {
   el.className = 'status ' + kind;
   el.querySelector('b').textContent = text;
 }
+/* ---- deshacer / rehacer (instantaneas de formas + ajustes) */
+const H = { undo: [], redo: [], cur: null, t: 0 };
+const histSnap = () => JSON.stringify({ settings: CFG(), shapes: SHAPES() });
+function histReset() { clearTimeout(H.t); H.undo = []; H.redo = []; H.cur = histSnap(); renderHist(); }
+function histCommit() {
+  clearTimeout(H.t);
+  if (!S.st || !D() || H.cur == null) return;
+  const s = histSnap();
+  if (s !== H.cur) { H.undo.push(H.cur); if (H.undo.length > 100) H.undo.shift(); H.redo = []; H.cur = s; }
+  renderHist();
+}
+function renderHist() {
+  if (!$('btn-undo') || !S.st || !D()) return;
+  $('btn-undo').disabled = !H.undo.length && H.cur === histSnap();
+  $('btn-redo').disabled = !H.redo.length;
+}
+function histApply(snap) {
+  const o = JSON.parse(snap);
+  D().settings = { ...DEFAULT_SETTINGS, ...o.settings };
+  D().shapes = o.shapes;
+  E.sel = null; E.multi.clear(); E.tool = null; E.pts = false; E.meta = null;
+  refreshEditor(); scheduleBuild(50);
+}
+function undo() { histCommit(); if (!H.undo.length) return; H.redo.push(H.cur); H.cur = H.undo.pop(); histApply(H.cur); renderHist(); }
+function redo() { histCommit(); if (!H.redo.length) return; H.undo.push(H.cur); H.cur = H.redo.pop(); histApply(H.cur); renderHist(); }
+document.addEventListener('keydown', (e) => {
+  if (S.view !== 'bin' || !(e.ctrlKey || e.metaKey)) return;
+  const tg = e.target;
+  if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.isContentEditable)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+  else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); }
+});
 function scheduleBuild(delay = 450) {
+  clearTimeout(H.t); H.t = setTimeout(histCommit, 600);
   clearTimeout(E.timer);
   E.dirty = true;
   setStatus('working', 'Generando…');
@@ -432,6 +468,20 @@ function showInfo(m) {
   ].join('');
   const w = $('bin-warn');
   w.replaceChildren(...m.warnings.map((t) => { const li = document.createElement('li'); li.textContent = t; return li; }));
+  renderChecks(m.checks || []);
+}
+function renderChecks(list) {
+  const box = $('checks'), warns = list.filter((c) => c.level === 'warn'), infos = list.filter((c) => c.level !== 'warn');
+  $('checks-h').textContent = warns.length ? `Printability · ${warns.length} aviso${warns.length > 1 ? 's' : ''}` : 'Printability · todo en orden ✓';
+  box.replaceChildren(...[...warns, ...infos].map((c) => {
+    const li = document.createElement('li');
+    li.className = c.level; li.textContent = c.msg;
+    if (c.shapes && c.shapes.length) {
+      li.classList.add('click'); li.title = 'Seleccionar las formas implicadas';
+      li.addEventListener('click', () => { E.sel = c.shapes[0]; renderPop(); renderToolbar(); renderLayout(); });
+    }
+    return li;
+  }));
 }
 function setDownloads(on) {
   const id = S.st.id;
@@ -647,8 +697,15 @@ function selectShape(id) {
 }
 
 /* ---- barra de herramientas y paneles flotantes */
+function selIds() { return E.multi.size > 1 ? SHAPES().filter((q) => E.multi.has(q.id)).map((q) => q.id) : (E.sel ? [E.sel] : []); }
 function renderToolbar() {
+  if (!E.sel) E.multi.clear();
   const has = !!selShape();
+  const n = selIds().length;
+  document.querySelectorAll('#alignbar button').forEach((b) => {
+    b.disabled = n < 1 || (n < 2 && b.dataset.al.startsWith('d')) || (n < 3 && b.dataset.al.startsWith('d'));
+  });
+  $('alignbar-n').textContent = n > 1 ? `${n} formas` : n === 1 ? '1 forma → bin' : '';
   document.querySelectorAll('#toolbar button').forEach((b) => {
     const t = b.dataset.tool;
     b.disabled = !has && t !== 'done';
@@ -664,6 +721,34 @@ $('toolbar').addEventListener('click', (e) => {
   else if (t === 'delete' && sh) deleteShape(sh.id);
   else if (t === 'done') { E.sel = null; E.tool = null; E.pts = false; refreshEditor(); }
   else if (['notch', 'pocket', 'edit'].includes(t)) { E.tool = E.tool === t ? null : t; if (t !== 'edit') E.pts = false; renderToolbar(); renderPop(); renderLayout(); }
+});
+$('alignbar').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.disabled) return;
+  const ids = selIds(), list = SHAPES().filter((q) => ids.includes(q.id)), a = b.dataset.al;
+  const bb = list.map((q) => bboxOf(q));
+  let ref;
+  if (list.length > 1) ref = [Math.min(...bb.map((x) => x[0])), Math.min(...bb.map((x) => x[1])), Math.max(...bb.map((x) => x[2])), Math.max(...bb.map((x) => x[3]))];
+  else if (CFG().auto_size) ref = groupBBox();
+  else { const [gw, gd] = binGrid(), u = CFG().grid_unit_mm, w = gw * u - 0.5 - 2 * CFG().wall_thickness_mm, h = gd * u - 0.5 - 2 * CFG().wall_thickness_mm; ref = [-w / 2, -h / 2, w / 2, h / 2]; }
+  const move = (q, dx, dy) => { q.x = r2(q.x + dx); q.y = r2(q.y + dy); };
+  list.forEach((q, i) => {
+    const x = bb[i];
+    if (a === 'left') move(q, ref[0] - x[0], 0);
+    else if (a === 'right') move(q, ref[2] - x[2], 0);
+    else if (a === 'hc') move(q, (ref[0] + ref[2]) / 2 - (x[0] + x[2]) / 2, 0);
+    else if (a === 'top') move(q, 0, ref[1] - x[1]);
+    else if (a === 'bottom') move(q, 0, ref[3] - x[3]);
+    else if (a === 'vc') move(q, 0, (ref[1] + ref[3]) / 2 - (x[1] + x[3]) / 2);
+  });
+  if (a === 'dh' || a === 'dv') {                          // reparte con huecos iguales entre cajas
+    const ax = a === 'dh' ? 0 : 1;
+    const ord = list.map((q, i) => ({ q, lo: bb[i][ax], hi: bb[i][ax + 2] })).sort((m, n) => m.lo - n.lo);
+    const total = ord[ord.length - 1].hi - ord[0].lo, sizes = ord.reduce((t, o) => t + (o.hi - o.lo), 0), gap = (total - sizes) / (ord.length - 1);
+    let pos = ord[0].lo;
+    for (const o of ord) { const dlt = pos - o.lo; if (ax === 0) move(o.q, dlt, 0); else move(o.q, 0, dlt); pos += o.hi - o.lo + gap; }
+  }
+  recenterGroup(); afterEdit();
 });
 function afterEdit() { renderLayout(); renderPop(); scheduleBuild(); }
 
@@ -726,11 +811,15 @@ function renderLayout() {
   svg.append(bin);
   for (let i = 1; i < gw; i++) svg.append(svgEl('line', { x1: -Wd / 2 + i * u, y1: -Dd / 2, x2: -Wd / 2 + i * u, y2: Dd / 2, class: 'bin-grid' }));
   for (let j = 1; j < gd; j++) svg.append(svgEl('line', { x1: -Wd / 2, y1: -Dd / 2 + j * u, x2: Wd / 2, y2: -Dd / 2 + j * u, class: 'bin-grid' }));
+  for (const k of cellsOff()) {
+    const [ci, cj] = k.split(',').map(Number);
+    if (ci < gw && cj < gd) svg.append(svgEl('rect', { x: -Wd / 2 + ci * u, y: -Dd / 2 + cj * u, width: u, height: u, class: 'cell-off' }));
+  }
   const probs = (E.meta && E.meta.problems) || {};
   const halo = Math.max(0, c.clearance_mm);
   for (const sh of SHAPES()) {
     const geo = localGeom(sh);
-    const grp = g({ class: 'shp' + (sh.id === E.sel ? ' sel' : '') + (probs[sh.id] ? ' bad' : ''), 'data-shape': sh.id, transform: `translate(${sh.x} ${sh.y}) rotate(${sh.rot})` });
+    const grp = g({ class: 'shp' + (sh.id === E.sel || E.multi.has(sh.id) ? ' sel' : '') + (probs[sh.id] ? ' bad' : ''), 'data-shape': sh.id, transform: `translate(${sh.x} ${sh.y}) rotate(${sh.rot})` });
     const d = [geo.outer, ...geo.holes].map(ringPath).join(' ');
     const ph = Math.max(0, halo + sh.offset_mm);
     if (ph > 0) grp.append(svgEl('path', { d, class: 'shp-halo', 'stroke-width': 2 * ph }));
@@ -796,11 +885,25 @@ $('lay-svg').addEventListener('pointerdown', (e) => {
   const gEl = t.closest('[data-shape]');
   if (gEl) {
     const sh = SHAPES().find((s) => s.id === gEl.dataset.shape);
+    if (e.shiftKey) {                                       // Shift+clic: suma o quita de la seleccion multiple
+      if (E.sel && !E.multi.size) E.multi.add(E.sel);
+      if (E.multi.has(sh.id)) { E.multi.delete(sh.id); if (E.sel === sh.id) E.sel = [...E.multi][0] || null; }
+      else { E.multi.add(sh.id); E.sel = sh.id; }
+      if (E.multi.size < 2) E.multi.clear();
+      E.tool = null; E.pts = false; renderTabs(); renderToolbar(); renderPop(); renderLayout();
+      return;
+    }
+    if (E.multi.size > 1 && E.multi.has(sh.id)) {           // arrastrar el grupo seleccionado
+      E.sel = sh.id;
+      set({ k: 'move', sh, px: p[0], py: p[1], x: sh.x, y: sh.y, moved: false, grp: SHAPES().filter((q) => E.multi.has(q.id)).map((q) => ({ q, x: q.x, y: q.y })) });
+      return;
+    }
+    E.multi.clear();
     if (sh.id !== E.sel) { E.sel = sh.id; E.pts = false; renderTabs(); renderToolbar(); renderPop(); renderLayout(); }
     set({ k: 'move', sh, px: p[0], py: p[1], x: sh.x, y: sh.y, moved: false });
     return;
   }
-  if (E.sel && !t.closest('.pop')) { E.sel = null; E.pts = false; refreshEditor(); }
+  if (E.sel && !t.closest('.pop') && !e.shiftKey) { E.sel = null; E.multi.clear(); E.pts = false; refreshEditor(); }
 });
 $('lay-svg').addEventListener('pointermove', (e) => {
   const d = E.drag;
@@ -809,6 +912,7 @@ $('lay-svg').addEventListener('pointermove', (e) => {
   if (d.k === 'move') {
     d.moved = true;
     d.sh.x = r2(d.x + p[0] - d.px); d.sh.y = r2(d.y + p[1] - d.py);
+    for (const g of d.grp || []) { g.q.x = r2(g.x + p[0] - d.px); g.q.y = r2(g.y + p[1] - d.py); }
   } else if (d.k === 'rot') {
     d.sh.x = d.x; d.sh.y = d.y; d.sh.rot = d.rot;
     let delta = ((Math.atan2(p[1] - d.c[1], p[0] - d.c[0]) - d.a0) * 180) / Math.PI;
@@ -845,6 +949,8 @@ $('lay-svg').addEventListener('keydown', (e) => {
   else if (e.key === 'r' || e.key === 'R') { setRot(sh, sh.rot + 90); recenterGroup(); afterEdit(); }
   else if (e.key === 'Escape') { E.sel = null; E.tool = null; E.pts = false; refreshEditor(); }
 });
+$('btn-undo').addEventListener('click', undo);
+$('btn-redo').addEventListener('click', redo);
 $('btn-arrange').addEventListener('click', async () => {
   const res = await busy('Ordenando…', () => api(`/api/sessions/${S.st.id}/design/arrange`, { method: 'POST', headers: JSON_HDR, body: JSON.stringify({ settings: CFG(), shapes: SHAPES() }) }));
   if (!res) return;
@@ -854,8 +960,8 @@ $('btn-arrange').addEventListener('click', async () => {
 });
 
 /* ---- ajustes del bin */
-const NUM = { 's-gw': 'grid_width', 's-gd': 'grid_depth', 's-hu': 'height_units', 's-unit': 'grid_unit_mm', 's-depth': 'pocket_depth_mm', 's-clr': 'clearance_mm', 's-ithk': 'insert_thickness_mm', 's-ifit': 'fit_clearance_mm', 's-wall': 'wall_thickness_mm', 's-md': 'magnet_diameter_mm', 's-mdep': 'magnet_depth_mm', 's-rib': 'hollow_rib_mm', 's-hfloor': 'hollow_floor_mm', 's-lidt': 'lid_thickness_mm', 's-ledge': 'lid_ledge_mm', 's-lidc': 'lid_clearance_mm' };
-const BOOL = { 's-auto': 'auto_size', 's-chamfer': 'pocket_chamfer', 's-insert': 'contrast_insert', 's-lip': 'stacking_lip', 's-mag': 'magnet_holes', 's-hollow': 'hollow' };
+const NUM = { 's-gw': 'grid_width', 's-gd': 'grid_depth', 's-hu': 'height_units', 's-unit': 'grid_unit_mm', 's-depth': 'pocket_depth_mm', 's-clr': 'clearance_mm', 's-ithk': 'insert_thickness_mm', 's-ifit': 'fit_clearance_mm', 's-wall': 'wall_thickness_mm', 's-md': 'magnet_diameter_mm', 's-mdep': 'magnet_depth_mm', 's-rib': 'hollow_rib_mm', 's-hfloor': 'hollow_floor_mm', 's-lidt': 'lid_thickness_mm', 's-ledge': 'lid_ledge_mm', 's-lidc': 'lid_clearance_mm', 's-bedx': 'bed_x_mm', 's-bedy': 'bed_y_mm', 's-nozzle': 'nozzle_mm' };
+const BOOL = { 's-auto': 'auto_size', 's-chamfer': 'pocket_chamfer', 's-insert': 'contrast_insert', 's-lip': 'stacking_lip', 's-mag': 'magnet_holes', 's-hollow': 'hollow', 's-partial': 'partial' };
 for (const [id, key] of Object.entries(NUM)) {
   $(id).addEventListener('change', () => {
     const el = $(id), lo = +el.min, hi = +el.max;
@@ -872,6 +978,10 @@ for (const [id, key] of Object.entries(BOOL)) {
   $(id).addEventListener('change', () => {
     const on = $(id).checked;
     if (key === 'auto_size' && !on && E.meta) { CFG().grid_width = E.meta.grid[0]; CFG().grid_depth = E.meta.grid[1]; }
+    if (key === 'partial' && on) {
+      if (E.meta) { CFG().grid_width = E.meta.grid[0]; CFG().grid_depth = E.meta.grid[1]; } else { const [a, b] = binGrid(); CFG().grid_width = a; CFG().grid_depth = b; }
+      CFG().auto_size = false;
+    }
     CFG()[key] = on;
     renderSettings(); renderLayout(); scheduleBuild();
   });
@@ -897,10 +1007,35 @@ function renderSettings() {
   document.querySelectorAll('.stepper button').forEach((b) => { b.disabled = (b.dataset.step === 's-gw' || b.dataset.step === 's-gd') && c.auto_size; });
   for (const [id, key] of Object.entries(NUM)) if (!['s-gw', 's-gd', 's-hu'].includes(id)) $(id).value = c[key];
   for (const [id, key] of Object.entries(BOOL)) $(id).checked = c[key];
+  $('s-auto').disabled = c.partial;
+  renderCells();
   $('s-ithk').disabled = $('s-ifit').disabled = !c.contrast_insert;
   $('s-md').disabled = $('s-mdep').disabled = !c.magnet_holes;
   for (const id of ['s-rib', 's-hfloor', 's-lidt', 's-ledge', 's-lidc']) $(id).disabled = !c.hollow;
   renderSettingsInfo();
+}
+function cellsOff() { return new Set(CFG().partial ? (CFG().cells_off || []) : []); }
+function renderCells() {
+  const c = CFG(), box = $('s-cells'), [gw, gd] = c.auto_size ? binGrid() : [c.grid_width, c.grid_depth];
+  $('s-cells-wrap').hidden = !c.partial;
+  box.replaceChildren();
+  if (!c.partial) return;
+  const off = new Set(c.cells_off || []);
+  box.style.gridTemplateColumns = `repeat(${gw}, 1fr)`;
+  for (let j = 0; j < gd; j++) for (let i = 0; i < gw; i++) {
+    const b = document.createElement('button');
+    const isOff = off.has(`${i},${j}`);
+    b.type = 'button'; b.className = 'cellbtn' + (isOff ? '' : ' on'); b.textContent = isOff ? 'Off' : 'On';
+    b.dataset.cell = `${i},${j}`;
+    b.addEventListener('click', () => {
+      const k = `${i},${j}`, cur = new Set(CFG().cells_off || []);
+      if (cur.has(k)) cur.delete(k); else cur.add(k);
+      if (cur.size >= gw * gd) cur.delete(k);               // al menos una celda activa
+      CFG().cells_off = [...cur];
+      renderCells(); renderLayout(); scheduleBuild();
+    });
+    box.append(b);
+  }
 }
 function renderSettingsInfo() {
   const c = CFG(), [gw, gd] = c.auto_size ? binGrid() : [c.grid_width, c.grid_depth], u = c.grid_unit_mm;
@@ -911,7 +1046,7 @@ function renderSettingsInfo() {
 }
 
 /* ---- puesta en marcha del editor */
-function refreshEditor() { renderTabs(); renderToolbar(); renderPop(); renderSettings(); renderLayout(); }
+function refreshEditor() { renderHist(); renderTabs(); renderToolbar(); renderPop(); renderSettings(); renderLayout(); }
 
 $('ed-back').addEventListener('click', () => go('shape'));
 $('ed-name').addEventListener('change', async () => {
@@ -926,7 +1061,7 @@ async function renderBin() {
   $('ed-name').value = st.name;
   initViewer();
   clearTimeout(E.timer);
-  E.sel = null; E.tool = null; E.pts = false; E.meta = st.bin_meta || null;
+  E.sel = null; E.multi.clear(); E.tool = null; E.pts = false; E.meta = st.bin_meta || null;
   setDownloads(!!st.bin_meta);
   if (!st.design) {
     if (!S.sel.size) return go('shape');
@@ -938,6 +1073,7 @@ async function renderBin() {
     st.design.settings = { ...DEFAULT_SETTINGS, ...st.design.settings };
   }
   refreshEditor();
+  histReset();
   if (st.bin_meta) { showInfo(st.bin_meta); setStatus('ok', 'Listo'); $('ed-saved').textContent = 'Guardado'; loadModels(st.bin_meta); }
   else { $('bin-info').innerHTML = ''; $('bin-warn').replaceChildren(); scheduleBuild(50); }
 }
