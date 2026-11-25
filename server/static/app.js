@@ -1037,6 +1037,14 @@ function renderCells() {
     box.append(b);
   }
 }
+$('s-complement').addEventListener('click', () => {
+  const c = CFG(), [gw, gd] = c.auto_size ? binGrid() : [c.grid_width, c.grid_depth], cur = new Set(c.cells_off || []);
+  const next = [];
+  for (let j = 0; j < gd; j++) for (let i = 0; i < gw; i++) if (!cur.has(`${i},${j}`)) next.push(`${i},${j}`);
+  if (!cur.size || next.length >= gw * gd) return toast('Apaga primero alguna celda: el complemento son las celdas apagadas', true);
+  c.cells_off = next;
+  renderCells(); renderLayout(); scheduleBuild();
+});
 function renderSettingsInfo() {
   const c = CFG(), [gw, gd] = c.auto_size ? binGrid() : [c.grid_width, c.grid_depth], u = c.grid_unit_mm;
   if (c.auto_size) { $('s-gw').value = gw; $('s-gd').value = gd; }
