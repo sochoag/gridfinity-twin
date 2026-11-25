@@ -28,7 +28,7 @@ DEFAULT_SETTINGS = {
     "contrast_insert": True, "insert_thickness_mm": 0.4, "fit_clearance_mm": 0.2,
     "wall_thickness_mm": 1.6, "stacking_lip": True,
     "magnet_holes": False, "magnet_diameter_mm": 6.5, "magnet_depth_mm": 2.4,
-    "hollow": False, "hollow_rib_mm": 2.0, "hollow_floor_mm": 1.2,
+    "hollow": False, "hollow_rib_mm": 2.4, "hollow_floor_mm": 1.2,
     "lid_thickness_mm": 1.2, "lid_ledge_mm": 0.8, "lid_clearance_mm": 0.2,
 }
 MIN_FLOOR = 1.0
@@ -168,14 +168,15 @@ def _hollow_parts(nw, nd, u, H, zone, pk_all, S, c_chamfer):
     rebaje de la parte alta (las costillas terminan `lid_t` por debajo del borde del bin)."""
     rib, bf = S["hollow_rib_mm"], S["hollow_floor_mm"]
     wall = S["wall_thickness_mm"]
-    lid_t = max(S["lid_thickness_mm"], c_chamfer + 0.2)          # el chaflan del bolsillo vive en la tapa
+    lid_t = S["lid_thickness_mm"]
+    rim = max(0.8, rib - S["lid_ledge_mm"])                       # reborde alto junto al bolsillo; el resto de la costilla es la grada de la tapa
     l_out = max(0.0, min(S["lid_ledge_mm"], wall - 0.8))          # escalon sobre la pared exterior
     z_body = FOOT_H + bf                                          # suelo de la cavidad del cuerpo
     A = zone.difference(pk_all.buffer(rib, 12))
     A = A.buffer(-0.5, 4).buffer(0.5, 4).simplify(0.03)           # quita rendijas < 1 mm (mallas degeneradas)
     A = unary_union([g for g in (A.geoms if hasattr(A, "geoms") else [A]) if g.area > 6.0])
     if A.is_empty:
-        return [], None, lid_t, l_out
+        return [], None, lid_t, l_out, rim
     parts = []
     # cavidad del cuerpo
     parts.append(extrude_poly(A, z_body, H - lid_t + 0.01))
@@ -206,8 +207,9 @@ def _hollow_parts(nw, nd, u, H, zone, pk_all, S, c_chamfer):
     parts.append(cup)
     # rebaje de la tapa (toda la zona util + escalon sobre la pared exterior)
     zone_ext = zone.buffer(l_out, 12) if l_out > 0 else zone
-    parts.append(extrude_poly(zone_ext, H - lid_t, H + 1.0))
-    return [p for p in parts if p is not None], zone_ext, lid_t, l_out
+    seat = zone_ext.difference(pk_all.buffer(rim, 12)).buffer(-0.05, 4).buffer(0.05, 4).simplify(0.03)
+    parts.append(extrude_poly(seat, H - lid_t, H + 1.0))
+    return [p for p in parts if p is not None], zone_ext, lid_t, l_out, rim
 
 
 def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult:
@@ -285,7 +287,7 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
     c = S["chamfer_mm"] if S["pocket_chamfer"] else 0.0
     hollow = bool(S["hollow"])
     if hollow:   # el rebaje de la tapa baja `lid_t` desde el borde: el bolsillo debe ser algo mas profundo
-        lid_need = max(S["lid_thickness_mm"], c + 0.2) + 1.0
+        lid_need = S["lid_thickness_mm"] + 1.0
         if any(H - z > 0 and (H - z) < lid_need for z in groups):
             warns.append(f"en modo hueco los bolsillos deben tener al menos {lid_need:.1f} mm de profundidad: se ajustaron")
             fixed: dict[float, list] = {}
@@ -318,13 +320,13 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
     stats = {}
     if hollow:
         pk_all = _poly_union([it["full"] for it in items])
-        hparts, zone_ext, lid_t, l_out = _hollow_parts(nw, nd, u, H, zone, pk_all, S, c)
+        hparts, zone_ext, lid_t, l_out, rim = _hollow_parts(nw, nd, u, H, zone, pk_all, S, c)
         if hparts:
             stats["lid_z"] = round(H - lid_t, 3)
             stats["solid_cm3"] = round((solid - Manifold.batch_boolean(cutters, 0)).volume() / 1000, 2)
             lid_cl = S["lid_clearance_mm"]
-            plate = zone_ext.buffer(-lid_cl, 12)
-            lid = extrude_poly(plate, H - lid_t, H) - Manifold.batch_boolean(cutters, 0)
+            plate = zone_ext.buffer(-lid_cl, 12).difference(pk_all.buffer(rim + lid_cl, 12)).buffer(-0.05, 4).buffer(0.05, 4).simplify(0.03)
+            lid = extrude_poly(plate, H - lid_t, H)
             lid = lid.translate((0, 0, -(H - lid_t)))
             cutters += hparts
         else:

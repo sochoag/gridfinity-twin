@@ -303,7 +303,7 @@ const DEFAULT_SETTINGS = {
   auto_size: true, grid_width: 4, grid_depth: 4, height_units: 3, grid_unit_mm: 42, pocket_depth_mm: 12, pocket_chamfer: true,
   chamfer_mm: 1, clearance_mm: 1, contrast_insert: true, insert_thickness_mm: 0.4, fit_clearance_mm: 0.2, wall_thickness_mm: 1.6,
   stacking_lip: true, magnet_holes: false, magnet_diameter_mm: 6.5, magnet_depth_mm: 2.4,
-  hollow: false, hollow_rib_mm: 2, hollow_floor_mm: 1.2, lid_thickness_mm: 1.2, lid_ledge_mm: 0.8, lid_clearance_mm: 0.2,
+  hollow: false, hollow_rib_mm: 2.4, hollow_floor_mm: 1.2, lid_thickness_mm: 1.2, lid_ledge_mm: 0.8, lid_clearance_mm: 0.2,
 };
 const E = { sel: null, tool: null, pts: false, building: false, pending: false, timer: 0, meta: null, drag: null, menu: null };
 const D = () => S.st.design;

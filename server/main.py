@@ -182,7 +182,7 @@ class SettingsIn(BaseModel):
     magnet_diameter_mm: float = Field(6.5, ge=4, le=8.2)
     magnet_depth_mm: float = Field(2.4, ge=1, le=4)
     hollow: bool = False
-    hollow_rib_mm: float = Field(2.0, ge=1.2, le=6)
+    hollow_rib_mm: float = Field(2.4, ge=1.2, le=6)
     hollow_floor_mm: float = Field(1.2, ge=0.8, le=4)
     lid_thickness_mm: float = Field(1.2, ge=0.8, le=3)
     lid_ledge_mm: float = Field(0.8, ge=0, le=3)
