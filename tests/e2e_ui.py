@@ -298,6 +298,10 @@ try:
 
         # descargas
         pg.click("#dl-menu-btn")
+        pg.click("#dl-menu-btn") if not pg.is_visible("#dl-test") else None
+        with pg.expect_download() as dt: pg.click("#dl-test")
+        check("test print: descarga un STL de 0.4 mm", "testprint" in dt.value.suggested_filename and dt.value.suggested_filename.endswith("0.4mm.stl"))
+        pg.click("#dl-menu-btn") if not pg.is_visible("#dl-zip") else None
         with pg.expect_download() as d1: pg.click("#dl-zip")
         f1 = d1.value
         import zipfile

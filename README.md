@@ -33,7 +33,7 @@ Cámara lo más vertical posible, papel completo y plano, buena luz sin sombras 
 
 ## API (resumen)
 `POST /api/sessions` (foto) · `POST /api/sessions/{id}/trace` · `POST /api/sessions/{id}/design/init|arrange` · `GET|PUT /api/sessions/{id}/design` ·
-`GET /api/sessions/{id}/bin.stl|insert.stl|lid.stl|dividers.stl|bin.zip|bin.3mf|bin.svg` (todos admiten `?bin=b2`; `bin.zip` y `bin.3mf` admiten `?all=1`) · `GET|POST /api/sessions/{id}/bins` · `PATCH|DELETE /api/sessions/{id}/bins/{bin}` · `POST /api/sessions/merge` · `GET|POST /api/library` · `PATCH|DELETE /api/library/{id}` · `GET|PATCH|DELETE /api/sessions[/{id}]`. Documentación interactiva en `/docs`.
+`GET /api/sessions/{id}/bin.stl|insert.stl|lid.stl|dividers.stl|bin.zip|bin.3mf|bin.svg|testprint.stl` (`testprint.stl`: solo el layout 2D extruido, `?h=0.4&mode=silhouettes|plate`) (todos admiten `?bin=b2`; `bin.zip` y `bin.3mf` admiten `?all=1`) · `GET|POST /api/sessions/{id}/bins` · `PATCH|DELETE /api/sessions/{id}/bins/{bin}` · `POST /api/sessions/merge` · `GET|POST /api/library` · `PATCH|DELETE /api/library/{id}` · `GET|PATCH|DELETE /api/sessions[/{id}]`. Documentación interactiva en `/docs`.
 
 ## Pruebas
 ```bash

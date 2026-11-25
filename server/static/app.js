@@ -625,7 +625,8 @@ function renderChecks(list) {
 }
 function setDownloads(on) {
   const id = S.st.id, b = S.bin || 'b1';
-  for (const [el, path] of [[$('dl-zip'), `bin.zip?bin=${b}`], [$('dl-3mf'), `bin.3mf?bin=${b}`], [$('dl-svg'), `bin.svg?bin=${b}`]]) {
+  for (const [el, path] of [[$('dl-zip'), `bin.zip?bin=${b}`], [$('dl-3mf'), `bin.3mf?bin=${b}`], [$('dl-svg'), `bin.svg?bin=${b}`],
+    [$('dl-test'), `testprint.stl?bin=${b}`], [$('dl-test-plate'), `testprint.stl?bin=${b}&mode=plate`]]) {
     el.classList.toggle('disabled', !on);
     el.href = on ? `/api/sessions/${id}/${path}` : '#';
   }
@@ -1682,6 +1683,8 @@ const MENUS = {
     { label: '📦 STLs (.zip)', fn: clickId('dl-zip') },
     { label: '🧩 3MF con colores', fn: clickId('dl-3mf') },
     { label: '✏️ Contorno (.svg)', fn: clickId('dl-svg') },
+    { label: '🧪 Test print 0.4 mm (siluetas)', fn: clickId('dl-test') },
+    { label: '🧪 Test print 0.4 mm (placa con huecos)', fn: clickId('dl-test-plate') },
     ...($('dl-all-wrap').classList.contains('hidden') ? [] : ['-', { head: 'Todos los bins' }, { label: '📦 Todos (.zip)', fn: clickId('dl-all-zip') }, { label: '🧩 Todos (.3mf)', fn: clickId('dl-all-3mf') }]),
   ],
   edit: () => [

@@ -507,3 +507,19 @@ def test_smart_brush():
     e2 = {"op": "add", "kind": "brush", "r": mm(30), "smart": True, "tol": 14, "pts": [[mm(370), mm(200)]]}
     o3 = P.apply_edits(m2, [e2], rect)
     assert o3[200, 395] == 255 and o3[200, 420] == 0
+
+
+def test_testprint():
+    st = _session()
+    sid = st["id"]
+    c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"}).raise_for_status()
+    des = c.post(f"/api/sessions/{sid}/design/init", json={"components": [0, 2]}).json()
+    r = c.put(f"/api/sessions/{sid}/design", json=des)
+    assert r.status_code == 200, r.text
+    import io, trimesh
+    for mode, minv in (("silhouettes", 0.5), ("plate", 0.5)):
+        t = c.get(f"/api/sessions/{sid}/testprint.stl?mode={mode}&h=0.4")
+        assert t.status_code == 200 and "testprint" in t.headers["content-disposition"]
+        m = trimesh.load(io.BytesIO(t.content), file_type="stl")
+        assert abs(m.bounds[1][2] - 0.4) < 1e-3 and m.is_watertight and m.volume > minv
+    assert c.get(f"/api/sessions/{sid}/testprint.stl?h=5").status_code == 422

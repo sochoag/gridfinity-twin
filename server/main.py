@@ -22,6 +22,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from shapely.geometry import Point, Polygon
+from shapely.ops import unary_union
+from shapely import wkt as shp_wkt
 
 import io
 import threading
@@ -623,6 +625,11 @@ def design_build(sid: str, body: DesignIn, bin: Optional[str] = None):
         r.checks.append({"level": "info", "code": "weight", "shapes": [],
                          "msg": f"≈ {vol * 1.24:.0f} g de PLA con relleno 100 % ({vol:.0f} cm³ en total)" + ("" if S["hollow"] else ": con Hollow bin gastas menos")})
     pockets_to_svg(r.pockets, str(bd / "bin.svg"))
+    pk = bd / "pockets.wkt"
+    if shapes:                                     # el contenedor (sin siluetas) no tiene layout que probar
+        pk.write_text(unary_union(r.pockets).wkt)
+    elif pk.exists():
+        pk.unlink()
     meta = {"grid": list(r.grid), "size_mm": [round(r.size_mm[0], 1), round(r.size_mm[1], 1)],
             "total_height_mm": round(r.total_height_mm, 1), "warnings": r.warnings, "problems": r.problems,
             "mesh": chk, "insert": ichk, "has_insert": r.insert is not None,
@@ -717,6 +724,37 @@ def bin_3mf(sid: str, bin: Optional[str] = None, all: bool = False):
     n = re.sub(r"[^A-Za-z0-9_-]+", "_", st["name"]).strip("_") or "bin" if all else _safe_name(st, ids[0])
     return Response(write_3mf(objs), media_type="model/3mf",
                     headers={"Content-Disposition": f'attachment; filename="{n}.3mf"'})
+
+
+@app.get("/api/sessions/{sid}/testprint.stl")
+def testprint_stl(sid: str, bin: Optional[str] = None, h: float = 0.4, mode: Literal["silhouettes", "plate"] = "silhouettes"):
+    """Test print: solo el layout 2D (siluetas con holgura) extruido `h` mm, para probar que las piezas calzan.
+    silhouettes: las siluetas como laminas sueltas (se apoya la herramienta encima).
+    plate: una placa delgada con las siluetas recortadas (la herramienta debe entrar por el hueco)."""
+    from geometry.gridfinity import extrude_poly
+    import tempfile
+    if not 0.1 <= h <= 2.0:
+        raise HTTPException(422, "el espesor del test debe estar entre 0.1 y 2 mm")
+    d = sdir(sid)
+    st = read_state(d)
+    bid = bin_id(bin)
+    holder(st, bid)
+    f = bin_dir(d, bid) / "pockets.wkt"
+    if not f.exists():
+        raise HTTPException(404, "este bin no tiene siluetas que probar (genera el bin con al menos una forma)")
+    g = shp_wkt.loads(f.read_text())
+    if mode == "plate":
+        g = g.buffer(5.0, 16).difference(g)
+    mesh = extrude_poly(g, 0.0, h)
+    if mesh is None:
+        raise HTTPException(422, "no hay geometria que exportar")
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "t.stl"
+        export_stl(mesh, str(p))
+        data = p.read_bytes()
+    suffix = "testprint" if mode == "silhouettes" else "testprint_placa"
+    return Response(data, media_type="model/stl",
+                    headers={"Content-Disposition": f'attachment; filename="{_safe_name(st, bid)}_{suffix}_{h:g}mm.stl"'})
 
 
 @app.get("/api/sessions/{sid}/bin.svg")
