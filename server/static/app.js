@@ -73,7 +73,7 @@ function go(view) {
   if (view === 'shape') renderShape();
   $('main').classList.toggle('wide', view === 'bin');
   document.body.classList.toggle('bin-mode', view === 'bin');
-  if (view === 'bin') renderBin();
+  S.binReady = view === 'bin' ? renderBin() : null;
   window.scrollTo({ top: 0 });
 }
 document.querySelectorAll('.step').forEach((b) => b.addEventListener('click', () => go(b.dataset.step)));
@@ -224,7 +224,8 @@ function galCard(it) {
   }
   const acts = document.createElement('div'); acts.className = 'acts';
   const view = document.createElement('button'); view.className = 'btn small'; view.textContent = 'Ver'; view.addEventListener('click', () => viewSilhouette(it));
-  acts.append(view);
+  const addb = document.createElement('button'); addb.className = 'btn small primary'; addb.textContent = '＋ A un bin'; addb.title = 'Añadir esta silueta a un bin existente'; addb.addEventListener('click', () => addSilhouetteToBin(it));
+  acts.append(addb, view);
   if (it.source === 'project') {
     const op = document.createElement('button'); op.className = 'btn small'; op.textContent = 'Abrir proyecto'; op.addEventListener('click', () => openSession(it.sid));
     acts.append(op);
@@ -255,6 +256,31 @@ function renderGallery() {
   section('gal-all', 'Todas las siluetas', list, '');
 }
 $('gal-q').addEventListener('input', renderGallery);
+async function addSilhouetteToBin(it) {
+  let list = [];
+  try { list = (await api('/api/sessions')).filter((s) => s.traced); } catch (e) { return toast(e.message, true); }
+  const opts = list.flatMap((s) => s.bins.filter((b) => b.has_design).map((b) => ({ sid: s.id, sname: s.name, bin: b })));
+  const M = modalShell(`Añadir «${it.name}» a un bin`, 'Añadir');
+  if (!opts.length) { M.body.innerHTML = '<p class="muted">Aún no hay bins diseñados. Abre un proyecto, elige sus objetos y diseña un bin primero.</p>'; return; }
+  M.body.innerHTML = '<p class="muted">Elige el bin donde quieres colocar la silueta (se añade con sus huecos y se acomoda sola).</p><div class="merge-list" id="ab-list"></div>';
+  const box = M.body.querySelector('#ab-list');
+  let pick = null;
+  for (const o of opts) {
+    const l = document.createElement('label');
+    const r = document.createElement('input'); r.type = 'radio'; r.name = 'ab'; r.addEventListener('change', () => { pick = o; M.go.disabled = false; });
+    const t = document.createElement('span');
+    t.textContent = `${o.sname} › ${o.bin.name}` + (o.bin.n_shapes ? ` · ${o.bin.n_shapes} forma${o.bin.n_shapes === 1 ? '' : 's'}` : '');
+    l.append(r, t); box.append(l);
+  }
+  M.go.addEventListener('click', async () => {
+    if (!pick) return;
+    M.close();
+    await openSession(pick.sid, pick.bin.id);
+    if (S.view !== 'bin' || !S.st.design) return toast('No se pudo abrir el bin', true);
+    importShapes([{ c: { id: 0, outer: it.outer, holes: it.holes, bbox: it.bbox }, name: it.name, label: it.name, withHoles: true, lib: it.source === 'lib' ? it : null }]);
+    toast(`«${it.name}» añadida a ${pick.bin.name}`);
+  });
+}
 function viewSilhouette(it) {
   const M = modalShell(it.name, 'Cerrar', true);
   const th = thumbSvg({ outer: it.outer, holes: it.holes, bbox: it.bbox });
@@ -325,6 +351,7 @@ async function openSession(id, bid = 'b1', view = null) {
   const saved = st.design && st.design.shapes.map((x) => x.comp).filter((x) => x != null);
   S.sel = new Set(saved && saved.length ? saved.filter((i) => ids.includes(i)) : ids);
   go(view || (st.design ? 'bin' : st.contours ? 'shape' : 'corners'));
+  if (S.binReady) await S.binReady;
 }
 
 /* ------------------------------------------------------------------ paso 2: esquinas del papel */
