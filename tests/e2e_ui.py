@@ -164,6 +164,7 @@ try:
         pg.click("#p-pts")
         nv = pg.locator("#lay-svg .vtx").count()
         check("modo puntos: vertices visibles", nv > 6 and pg.locator("#lay-svg .vtx-mid").count() == nv, f"({nv} puntos)")
+        pg.evaluate("document.querySelector('#lay-svg').scrollIntoView({block: 'center'})")
         v = pg.locator("#lay-svg .vtx").nth(2).bounding_box()
         p0 = S(f"return d.shapes[{idx}].outer[2]")
         drag(v["x"] + v["width"] / 2, v["y"] + v["height"] / 2, v["x"] + v["width"] / 2 + 12, v["y"] + v["height"] / 2 + 8)
@@ -216,6 +217,44 @@ try:
         check("imanes+sin chaflan+pared 2: malla cerrada", S("return S.st.bin_meta.mesh.watertight && S.st.bin_meta.has_insert"))
         pg.click("#s-reset"); ready()
         check("Reset restaura los ajustes", pg.input_value("#s-hu") == "3" and not pg.is_checked("#s-mag") and pg.is_checked("#s-chamfer"))
+
+        # modo hueco + tapa
+        sw("#s-hollow", True); ready()
+        check("hollow: hay tapa y mallas cerradas", S("return S.st.bin_meta.has_lid && S.st.bin_meta.mesh.watertight && S.st.bin_meta.lid.watertight"))
+        check("hollow: ahorro mostrado en la info", "Hueco" in pg.inner_text("#bin-info") and "−" in pg.inner_text("#bin-info"), pg.inner_text("#bin-info").replace("\n", " | "))
+        check("hollow: botón de tapa visible y ajustes habilitados", pg.is_visible("#v-lid") and not pg.is_disabled("#s-rib"))
+        pg.wait_for_timeout(600)
+        pg.click("#v-lid"); pg.wait_for_timeout(300)
+        check("tapa separada", "separada" in pg.inner_text("#v-lid"))
+        pg.locator("#viewer").screenshot(path=f"{SHOTS}/5b_hollow_exploded.png")
+        pg.click("#v-lid"); pg.click("#v-lid"); pg.wait_for_timeout(300)   # separada -> oculta -> montada
+        pg.locator("#viewer").screenshot(path=f"{SHOTS}/5b_hollow_assembled.png")
+        pg.click("#v-lid"); pg.wait_for_timeout(200)
+        pg.click("#v-lid"); pg.click("#v-lid")
+        pg.fill("#s-rib", "3"); pg.press("#s-rib", "Tab"); ready()
+        check("hollow con costilla 3 mm: cerrada", S("return S.st.bin_meta.mesh.watertight && S.st.bin_meta.lid.watertight"))
+        sw("#s-hollow", False); ready()
+        check("sin hollow: no hay tapa", S("return S.st.bin_meta.has_lid") is False and not pg.is_visible("#v-lid") and pg.is_disabled("#s-rib"))
+
+        # importar formas de otro proyecto
+        other = pg.request.post(f"http://127.0.0.1:{PORT}/api/sessions", multipart={"file": {"name": "Otro.jpg", "mimeType": "image/jpeg", "buffer": open(PHOTO, "rb").read()}, "paper": "A4"}).json()
+        pg.request.post(f"http://127.0.0.1:{PORT}/api/sessions/{other['id']}/trace", data={"corners": other["corners"], "paper": "A4"})
+        ntabs = pg.locator("#ed-tabs .tab").count()
+        pg.click(".tab-plus"); pg.click(".menu >> text=Importar de otro proyecto")
+        pg.wait_for_selector(".imp-card", timeout=10000)
+        check("importar: lista las siluetas del otro proyecto", pg.locator(".imp-card").count() == 4 and pg.is_disabled("#imp-go"))
+        pg.locator(".imp-card").nth(1).click(); pg.locator(".imp-card").nth(2).click()
+        check("importar: cuenta selección", "2 seleccionadas" in pg.inner_text("#imp-count") and not pg.is_disabled("#imp-go"))
+        pg.screenshot(path=f"{SHOTS}/5c_import.png")
+        pg.click("#imp-go"); ready()
+        check("importar: 2 formas nuevas independientes", pg.locator("#ed-tabs .tab").count() == ntabs + 2 and S("return d.shapes.filter((s) => s.comp == null && s.outer).length") == 2, f"{ntabs}")
+        check("importar: bin válido tras importar", S("return S.st.bin_meta.mesh.watertight"), S("return JSON.stringify([S.st.bin_meta.warnings, S.st.bin_meta.problems, S.st.bin_meta.mesh, d.shapes.map(s=>[s.id,s.x,s.y,s.rot])])"))
+        pg.click("#ed-tabs .tab.on .tab-more"); pg.click(".menu >> text=Duplicar"); ready()
+        check("duplicar una forma importada", pg.locator("#ed-tabs .tab").count() == ntabs + 3)
+        for _ in range(3):
+            pg.locator("#ed-tabs .tab").last.locator(".tab-more").click(); pg.click(".menu >> text=Eliminar"); ready()
+        check("quitar las importadas deja el diseño original", pg.locator("#ed-tabs .tab").count() == ntabs)
+        pg.request.delete(f"http://127.0.0.1:{PORT}/api/sessions/{other['id']}")
 
         # visor 3D: bin oscuro + inserto naranja
         pg.wait_for_timeout(800)

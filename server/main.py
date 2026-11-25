@@ -27,7 +27,7 @@ import io
 import threading
 import zipfile
 
-from geometry.design import DEFAULT_SETTINGS, FINGER_D, arrange, build_design, default_notch, local_polygon
+from geometry.design import DEFAULT_SETTINGS, FINGER_D, arrange, build_design, comp_of, default_notch, local_polygon
 from geometry.gridfinity import export_stl, pockets_to_svg
 from vision import pipeline as P
 
@@ -150,7 +150,7 @@ class Notch(BaseModel):
 class ShapeIn(BaseModel):
     id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,40}$")
     name: str = Field("Forma", max_length=80)
-    comp: int = Field(..., ge=0, le=200)
+    comp: Optional[int] = Field(None, ge=0, le=200)   # None: forma importada de otro proyecto (lleva su contorno)
     x: float = Field(0.0, ge=-2000, le=2000)
     y: float = Field(0.0, ge=-2000, le=2000)
     rot: float = Field(0.0, ge=-3600, le=3600)
@@ -181,6 +181,12 @@ class SettingsIn(BaseModel):
     magnet_holes: bool = False
     magnet_diameter_mm: float = Field(6.5, ge=4, le=8.2)
     magnet_depth_mm: float = Field(2.4, ge=1, le=4)
+    hollow: bool = False
+    hollow_rib_mm: float = Field(2.0, ge=1.2, le=6)
+    hollow_floor_mm: float = Field(1.2, ge=0.8, le=4)
+    lid_thickness_mm: float = Field(1.2, ge=0.8, le=3)
+    lid_ledge_mm: float = Field(0.8, ge=0, le=3)
+    lid_clearance_mm: float = Field(0.2, ge=0, le=0.6)
 
 
 class DesignIn(BaseModel):
@@ -319,6 +325,15 @@ def _comps(st: dict) -> list[dict]:
     return st["contours"]["components"]
 
 
+def _check_shapes(shapes: list[dict], comps: list[dict]):
+    for s in shapes:
+        if s["comp"] is None:
+            if not s.get("outer"):
+                raise HTTPException(422, f"la forma '{s['name']}' no tiene contorno")
+        elif s["comp"] >= len(comps):
+            raise HTTPException(422, "componente inexistente")
+
+
 def _safe_name(st: dict) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", st["name"]).strip("_") or "bin"
 
@@ -355,12 +370,11 @@ def design_arrange(sid: str, body: ArrangeIn):
     st = read_state(sdir(sid))
     comps = _comps(st)
     shapes = [s.model_dump() for s in body.shapes]
-    if any(s["comp"] >= len(comps) for s in shapes):
-        raise HTTPException(422, "componente inexistente")
+    _check_shapes(shapes, comps)
     S = body.settings
     polys = []
     for sh in shapes:
-        p = local_polygon(comps[sh["comp"]], sh)
+        p = local_polygon(comp_of(comps, sh), sh)
         p = p.buffer(sh["offset_mm"], 12) if sh["offset_mm"] else p
         n = sh["notch"]
         if n["on"]:
@@ -377,8 +391,7 @@ def design_build(sid: str, body: DesignIn):
     comps = _comps(st)
     shapes = [s.model_dump() for s in body.shapes]
     S = body.settings.model_dump()
-    if any(s["comp"] >= len(comps) for s in shapes):
-        raise HTTPException(422, "componente inexistente")
+    _check_shapes(shapes, comps)
     if len({s["id"] for s in shapes}) != len(shapes):
         raise HTTPException(422, "ids de forma repetidos")
     t0 = time.time()
@@ -398,10 +411,20 @@ def design_build(sid: str, body: DesignIn):
             _swap(d / "insert.tmp.stl", ins)
         elif ins.exists():
             ins.unlink()
+        lchk = None
+        lid = d / "lid.stl"
+        if r.lid is not None:
+            lchk = export_stl(r.lid, str(d / "lid.tmp.stl"))
+            _swap(d / "lid.tmp.stl", lid)
+            if not lchk["watertight"]:
+                r.warnings.append("la malla de la tapa no es cerrada: revisa los parametros o repara el STL en tu slicer")
+        elif lid.exists():
+            lid.unlink()
     pockets_to_svg(r.pockets, str(d / "bin.svg"))
     meta = {"grid": list(r.grid), "size_mm": [round(r.size_mm[0], 1), round(r.size_mm[1], 1)],
             "total_height_mm": round(r.total_height_mm, 1), "warnings": r.warnings, "problems": r.problems,
             "mesh": chk, "insert": ichk, "has_insert": r.insert is not None,
+            "lid": lchk, "has_lid": r.lid is not None, "stats": r.stats,
             "build_seconds": round(time.time() - t0, 2), "stamp": int(time.time() * 1000)}
     st["design"], st["bin_meta"] = {"settings": S, "shapes": shapes}, meta
     write_state(d, st)
@@ -424,6 +447,14 @@ def insert_stl(sid: str):
     return FileResponse(d / "insert.stl", media_type="model/stl", filename=f"{_safe_name(read_state(d))}_insert.stl")
 
 
+@app.get("/api/sessions/{sid}/lid.stl")
+def lid_stl(sid: str):
+    d = sdir(sid)
+    if not (d / "lid.stl").exists():
+        raise HTTPException(404, "este bin no tiene tapa (activa Hollow)")
+    return FileResponse(d / "lid.stl", media_type="model/stl", filename=f"{_safe_name(read_state(d))}_lid.stl")
+
+
 @app.get("/api/sessions/{sid}/bin.zip")
 def bin_zip(sid: str):
     d = sdir(sid)
@@ -435,6 +466,8 @@ def bin_zip(sid: str):
         z.write(d / "bin.stl", f"{n}_bin.stl")
         if (d / "insert.stl").exists():
             z.write(d / "insert.stl", f"{n}_insert.stl")
+        if (d / "lid.stl").exists():
+            z.write(d / "lid.stl", f"{n}_lid.stl")
     return Response(buf.getvalue(), media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{n}_stls.zip"'})
 

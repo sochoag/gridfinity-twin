@@ -153,7 +153,7 @@ async function openSession(id) {
   if (!st) return;
   S.st = st;
   const ids = st.contours ? st.contours.components.map((c) => c.id) : [];
-  const saved = st.design && st.design.shapes.map((x) => x.comp);
+  const saved = st.design && st.design.shapes.map((x) => x.comp).filter((x) => x != null);
   S.sel = new Set(saved && saved.length ? saved.filter((i) => ids.includes(i)) : ids);
   go(st.design ? 'bin' : st.contours ? 'shape' : 'corners');
 }
@@ -303,6 +303,7 @@ const DEFAULT_SETTINGS = {
   auto_size: true, grid_width: 4, grid_depth: 4, height_units: 3, grid_unit_mm: 42, pocket_depth_mm: 12, pocket_chamfer: true,
   chamfer_mm: 1, clearance_mm: 1, contrast_insert: true, insert_thickness_mm: 0.4, fit_clearance_mm: 0.2, wall_thickness_mm: 1.6,
   stacking_lip: true, magnet_holes: false, magnet_diameter_mm: 6.5, magnet_depth_mm: 2.4,
+  hollow: false, hollow_rib_mm: 2, hollow_floor_mm: 1.2, lid_thickness_mm: 1.2, lid_ledge_mm: 0.8, lid_clearance_mm: 0.2,
 };
 const E = { sel: null, tool: null, pts: false, building: false, pending: false, timer: 0, meta: null, drag: null, menu: null };
 const D = () => S.st.design;
@@ -426,6 +427,7 @@ function showInfo(m) {
     `<span>Grid <b>${m.grid[0]} × ${m.grid[1]}</b></span>`,
     `<span>Size <b>${m.size_mm[0]} × ${m.size_mm[1]} × ${m.total_height_mm} mm</b></span>`,
     m.mesh ? `<span>Mesh <b>${m.mesh.watertight ? 'cerrada ✓' : 'con errores ✗'}</b>${m.mesh.volume_cm3 ? ` · ${m.mesh.volume_cm3} cm³` : ''}</span>` : '',
+    m.has_lid && m.stats && m.stats.solid_cm3 ? `<span>Hueco <b>${m.stats.solid_cm3} → ${m.stats.bin_cm3} cm³ (−${Math.round((1 - m.stats.bin_cm3 / m.stats.solid_cm3) * 100)} %)</b> · tapa ${m.stats.lid_cm3} cm³</span>` : '',
     `<span class="muted">${m.build_seconds} s</span>`,
   ].join('');
   const w = $('bin-warn');
@@ -490,10 +492,10 @@ function renderTabs() {
     box.append(t);
   }
   const plus = document.createElement('button');
-  plus.className = 'tab-plus'; plus.textContent = '+'; plus.title = 'Añadir un objeto detectado'; plus.setAttribute('aria-label', 'Añadir forma');
+  plus.className = 'tab-plus'; plus.textContent = '+'; plus.title = 'Añadir un objeto detectado o importar de otro proyecto'; plus.setAttribute('aria-label', 'Añadir forma');
   plus.addEventListener('click', (e) => {
     e.stopPropagation();
-    openMenu(plus, S.st.contours.components.map((c) => ({ label: `Objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => addShape(c.id) })));
+    openMenu(plus, [...S.st.contours.components.map((c) => ({ label: `Objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => addShape(c.id) })), '-', { label: 'Importar de otro proyecto…', fn: openImport }]);
   });
   box.append(plus);
 }
@@ -514,22 +516,14 @@ function newId() {
 function overlapsAny(b, ignore) {
   return SHAPES().some((o) => { if (o === ignore) return false; const q = bboxOf(o); return !(b[2] < q[0] - 2 || b[0] > q[2] + 2 || b[3] < q[1] - 2 || b[1] > q[3] + 2); });
 }
-function addShape(comp, from) {
-  const c = S.st.contours.components[comp];
-  const id = newId();
-  const sh = from ? JSON.parse(JSON.stringify(from)) : {
-    comp, mirror: false, offset_mm: 0, depth_mm: null, keep_holes: false, rot: 0,
-    notch: { on: false, d: 16, u: 0, v: 0 },
-  };
-  sh.id = id; sh.comp = comp;
-  sh.name = from ? `${from.name} copia` : `${S.st.name}·P${SHAPES().length + 1}`;
-  if (!from) { // muesca por defecto en el extremo del eje largo
-    const half = [c.bbox.width / 2 - 2.4, 0];
-    sh.notch.u = r2(half[0]); sh.notch.v = 0;
-    if (c.bbox.height > c.bbox.width) { sh.notch.u = 0; sh.notch.v = r2(c.bbox.height / 2 - 2.4); }
-  }
+function shapeDims(sh) { // ancho y alto de la caja local (sin rotar)
+  const o = localGeom(sh).outer, xs = o.map((p) => p[0]), ys = o.map((p) => p[1]);
+  return [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)];
+}
+function defaultNotchUV(w, h) { return h > w ? [0, r2(h / 2 - 2.4)] : [r2(w / 2 - 2.4), 0]; }
+function placeShape(sh) { // busca un hueco libre (barrido sobre rejilla de 10 mm) y la añade
+  const [w, h] = shapeDims(sh);
   sh.x = 0; sh.y = 0;
-  // buscar un hueco libre (barrido en espiral sobre rejilla de 10 mm)
   const [gw, gd] = binGrid(), u = CFG().grid_unit_mm;
   const maxX = (gw * u) / 2, maxY = (gd * u) / 2;
   let placed = false;
@@ -540,12 +534,103 @@ function addShape(comp, from) {
       if (b[0] > -maxX + 2 && b[2] < maxX - 2 && b[1] > -maxY + 2 && b[3] < maxY - 2 && !overlapsAny(b, sh)) placed = true;
     }
   }
-  if (!placed) { const gb = groupBBox(); sh.x = 0; sh.y = (gb[3] || 0) + c.bbox.height / 2 + 6; }
+  if (!placed) { const gb = groupBBox(); sh.x = 0; sh.y = (gb[3] || 0) + h / 2 + 6; }
   SHAPES().push(sh);
+}
+function addShape(comp, from) {
+  const id = newId();
+  const sh = from ? JSON.parse(JSON.stringify(from)) : {
+    comp, mirror: false, offset_mm: 0, depth_mm: null, keep_holes: false, rot: 0,
+    notch: { on: false, d: 16, u: 0, v: 0 },
+  };
+  sh.id = id; sh.comp = comp;
+  sh.name = from ? `${from.name} copia` : `${S.st.name}·P${SHAPES().length + 1}`;
+  if (!from) {
+    const c = S.st.contours.components[comp];
+    [sh.notch.u, sh.notch.v] = defaultNotchUV(c.bbox.width, c.bbox.height);
+  }
+  placeShape(sh);
   recenterGroup();
   E.sel = id; E.tool = null; E.pts = false;
   refreshEditor();
   scheduleBuild();
+}
+
+/* ---- importar formas de otros proyectos (el contorno se copia: la forma queda independiente) */
+function importShapes(items) {
+  let last = null;
+  for (const { c, name: srcName } of items) {
+    const xs = c.outer.map((p) => p[0]), ys = c.outer.map((p) => p[1]);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const f = (ring) => ring.map((p) => [r2(p[0] - cx), r2(p[1] - cy)]);
+    const sh = { id: newId(), name: `${srcName}·P${c.id + 1}`, comp: null, outer: f(c.outer), holes: [],
+      mirror: false, offset_mm: 0, depth_mm: null, keep_holes: false, rot: 0, notch: { on: false, d: 16, u: 0, v: 0 } };
+    [sh.notch.u, sh.notch.v] = defaultNotchUV(c.bbox.width, c.bbox.height);
+    placeShape(sh);
+    last = sh;
+  }
+  recenterGroup();
+  E.sel = last.id; E.tool = null; E.pts = false;
+  refreshEditor();
+  scheduleBuild();
+}
+function thumbSvg(c) {
+  const b = c.bbox, pad = Math.max(b.width, b.height) * 0.06;
+  const svg = svgEl('svg', { viewBox: `${b.x - pad} ${b.y - pad} ${b.width + 2 * pad} ${b.height + 2 * pad}`, class: 'imp-thumb' });
+  svg.append(svgEl('path', { d: [c.outer, ...c.holes].map(pathD).join(' '), 'fill-rule': 'evenodd' }));
+  return svg;
+}
+async function openImport() {
+  closeMenu();
+  const ov = document.createElement('div');
+  ov.className = 'modal-ov';
+  ov.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="Importar formas"><div class="modal-h"><b>Importar formas de otro proyecto</b><span class="grow"></span><button class="link" id="imp-x">Cerrar</button></div><div class="modal-b" id="imp-body"><p class="muted">Cargando proyectos…</p></div><div class="modal-f"><span class="muted" id="imp-count">0 seleccionadas</span><span class="grow"></span><button class="btn primary" id="imp-go" disabled>Importar</button></div></div>`;
+  document.body.append(ov);
+  const close = () => ov.remove();
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+  ov.querySelector('#imp-x').addEventListener('click', close);
+  const keyh = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', keyh); } };
+  document.addEventListener('keydown', keyh);
+  const body = ov.querySelector('#imp-body'), pick = new Map(); // clave "sid:id" -> {c, name}
+  const upd = () => { ov.querySelector('#imp-count').textContent = `${pick.size} seleccionada${pick.size === 1 ? '' : 's'}`; ov.querySelector('#imp-go').disabled = !pick.size; };
+  try {
+    const list = (await api('/api/sessions')).filter((s) => s.traced && s.id !== S.st.id);
+    if (!list.length) { body.innerHTML = '<p class="muted">No hay otros proyectos con siluetas trazadas.</p>'; return; }
+    body.replaceChildren();
+    for (const s of list) {
+      const sec = document.createElement('section');
+      sec.className = 'imp-sec';
+      const h = document.createElement('h4');
+      h.textContent = `${s.name} · ${s.n_components} objeto${s.n_components === 1 ? '' : 's'}`;
+      const grid = document.createElement('div');
+      grid.className = 'imp-grid';
+      sec.append(h, grid);
+      body.append(sec);
+      api(`/api/sessions/${s.id}`).then((full) => {
+        if (!full.contours) return;
+        for (const c of full.contours.components) {
+          const card = document.createElement('button');
+          card.className = 'imp-card'; card.type = 'button';
+          const cap = document.createElement('span');
+          cap.textContent = `${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`;
+          card.append(thumbSvg(c), cap);
+          const key = `${s.id}:${c.id}`;
+          card.addEventListener('click', () => {
+            if (pick.has(key)) { pick.delete(key); card.classList.remove('on'); } else { pick.set(key, { c, name: s.name }); card.classList.add('on'); }
+            upd();
+          });
+          grid.append(card);
+        }
+      }).catch(() => { grid.textContent = 'No se pudo leer este proyecto'; });
+    }
+  } catch (e) { body.innerHTML = `<p class="muted">${e.message}</p>`; }
+  ov.querySelector('#imp-go').addEventListener('click', () => {
+    const items = [...pick.values()];
+    close(); document.removeEventListener('keydown', keyh);
+    if (!items.length) return;
+    importShapes(items);
+    toast(`${items.length} forma${items.length === 1 ? '' : 's'} importada${items.length === 1 ? '' : 's'}`);
+  });
 }
 function deleteShape(id) {
   if (SHAPES().length <= 1) return toast('El bin necesita al menos una forma', true);
@@ -610,7 +695,7 @@ function renderPop() {
       <div class="btnrow"><button class="btn small" id="p-mirror">⇋ Mirror</button>
       <button class="btn small ${E.pts ? 'primary' : ''}" id="p-pts">${E.pts ? '✓ Editing points' : '✎ Edit points'}</button></div>
       <label class="check"><input type="checkbox" id="p-holes" ${sh.keep_holes ? 'checked' : ''} ${sh.outer ? 'disabled' : ''}> Keep inner holes</label>
-      <button class="btn small" id="p-reset" ${sh.outer ? '' : 'disabled'}>Reset contour</button>
+      <button class="btn small" id="p-reset" ${sh.outer && sh.comp != null ? '' : 'disabled'}>Reset contour</button>
       <p class="muted">${E.pts ? 'Arrastra un punto; doble clic lo borra; arrastra un punto central para añadir uno.' : 'Offset agranda (+) o reduce (−) la forma.'}</p>`;
     on('p-off', () => { sh.offset_mm = Math.min(10, Math.max(-5, +$('p-off').value || 0)); afterEdit(); });
     on('p-mirror', () => {
@@ -769,8 +854,8 @@ $('btn-arrange').addEventListener('click', async () => {
 });
 
 /* ---- ajustes del bin */
-const NUM = { 's-gw': 'grid_width', 's-gd': 'grid_depth', 's-hu': 'height_units', 's-unit': 'grid_unit_mm', 's-depth': 'pocket_depth_mm', 's-clr': 'clearance_mm', 's-ithk': 'insert_thickness_mm', 's-ifit': 'fit_clearance_mm', 's-wall': 'wall_thickness_mm', 's-md': 'magnet_diameter_mm', 's-mdep': 'magnet_depth_mm' };
-const BOOL = { 's-auto': 'auto_size', 's-chamfer': 'pocket_chamfer', 's-insert': 'contrast_insert', 's-lip': 'stacking_lip', 's-mag': 'magnet_holes' };
+const NUM = { 's-gw': 'grid_width', 's-gd': 'grid_depth', 's-hu': 'height_units', 's-unit': 'grid_unit_mm', 's-depth': 'pocket_depth_mm', 's-clr': 'clearance_mm', 's-ithk': 'insert_thickness_mm', 's-ifit': 'fit_clearance_mm', 's-wall': 'wall_thickness_mm', 's-md': 'magnet_diameter_mm', 's-mdep': 'magnet_depth_mm', 's-rib': 'hollow_rib_mm', 's-hfloor': 'hollow_floor_mm', 's-lidt': 'lid_thickness_mm', 's-ledge': 'lid_ledge_mm', 's-lidc': 'lid_clearance_mm' };
+const BOOL = { 's-auto': 'auto_size', 's-chamfer': 'pocket_chamfer', 's-insert': 'contrast_insert', 's-lip': 'stacking_lip', 's-mag': 'magnet_holes', 's-hollow': 'hollow' };
 for (const [id, key] of Object.entries(NUM)) {
   $(id).addEventListener('change', () => {
     const el = $(id), lo = +el.min, hi = +el.max;
@@ -814,6 +899,7 @@ function renderSettings() {
   for (const [id, key] of Object.entries(BOOL)) $(id).checked = c[key];
   $('s-ithk').disabled = $('s-ifit').disabled = !c.contrast_insert;
   $('s-md').disabled = $('s-mdep').disabled = !c.magnet_holes;
+  for (const id of ['s-rib', 's-hfloor', 's-lidt', 's-ledge', 's-lidc']) $(id).disabled = !c.hollow;
   renderSettingsInfo();
 }
 function renderSettingsInfo() {
@@ -858,7 +944,7 @@ async function renderBin() {
 
 /* ---- visor 3D (bin + inserto) */
 const PALETTES = [
-  { bin: 0x3b3b3f, insert: 0xe0561a }, { bin: 0xc9c6bd, insert: 0x2d6cdf }, { bin: 0x2f6f4f, insert: 0xf2b134 }, { bin: 0x4a4e8a, insert: 0xe8d7a1 },
+  { bin: 0x3b3b3f, insert: 0xe0561a, lid: 0x6b6b72 }, { bin: 0xc9c6bd, insert: 0x2d6cdf, lid: 0x9d9a90 }, { bin: 0x2f6f4f, insert: 0xf2b134, lid: 0x58a07e }, { bin: 0x4a4e8a, insert: 0xe8d7a1, lid: 0x7c80c4 },
 ];
 function initViewer() {
   if (S.viewer) { S.viewer.resize(); return; }
@@ -868,7 +954,7 @@ function initViewer() {
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   } catch (e) {
     el.innerHTML = '<p style="padding:20px;color:#6b6b70">Tu navegador no pudo iniciar WebGL, así que no hay vista previa 3D. Puedes descargar los STL igualmente.</p>';
-    S.viewer = { noGL: true, resize() {}, load() {}, clear() {}, view() {}, palette() {} };
+    S.viewer = { noGL: true, resize() {}, load() {}, clear() {}, view() {}, palette() {}, setLid() {}, cycleLid() { return 'on'; } };
     return;
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -884,10 +970,11 @@ function initViewer() {
   scene.add(grid);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
-  const mats = { bin: new THREE.MeshStandardMaterial({ color: PALETTES[0].bin, roughness: 0.6, metalness: 0.05 }), insert: new THREE.MeshStandardMaterial({ color: PALETTES[0].insert, roughness: 0.5, metalness: 0.05 }) };
+  const mats = { bin: new THREE.MeshStandardMaterial({ color: PALETTES[0].bin, roughness: 0.6, metalness: 0.05 }), insert: new THREE.MeshStandardMaterial({ color: PALETTES[0].insert, roughness: 0.5, metalness: 0.05 }), lid: new THREE.MeshStandardMaterial({ color: PALETTES[0].lid, roughness: 0.6, metalness: 0.05 }) };
   const loader = new STLLoader();
-  const meshes = { bin: null, insert: null };
-  let size = new THREE.Vector3(120, 120, 30), pal = 0;
+  const meshes = { bin: null, insert: null, lid: null };
+  let size = new THREE.Vector3(120, 120, 30), pal = 0, lidZ = 20, lidMode = 'on';
+  const placeLid = () => { if (!meshes.lid) return; meshes.lid.visible = lidMode !== 'off'; meshes.lid.position.z = lidZ + (lidMode === 'apart' ? Math.max(25, size.z * 1.1) : 0); };
   const v = {
     renderer, scene, camera, controls,
     resize() {
@@ -897,7 +984,7 @@ function initViewer() {
       camera.aspect = w / h; camera.updateProjectionMatrix();
     },
     clear(kind) {
-      for (const k of kind ? [kind] : ['bin', 'insert']) if (meshes[k]) { scene.remove(meshes[k]); meshes[k].geometry.dispose(); meshes[k] = null; }
+      for (const k of kind ? [kind] : ['bin', 'insert', 'lid']) if (meshes[k]) { scene.remove(meshes[k]); meshes[k].geometry.dispose(); meshes[k] = null; }
     },
     load(url, kind, fit) {
       return new Promise((resolve, reject) => loader.load(url, (g) => {
@@ -906,6 +993,7 @@ function initViewer() {
         meshes[kind] = new THREE.Mesh(g, mats[kind]);
         scene.add(meshes[kind]);
         if (kind === 'bin') { size = g.boundingBox.getSize(new THREE.Vector3()); if (fit) v.view('reset'); }
+        if (kind === 'lid') placeLid();
         resolve();
       }, undefined, reject));
     },
@@ -919,7 +1007,9 @@ function initViewer() {
       camera.near = d / 100; camera.far = d * 20; camera.updateProjectionMatrix();
       controls.update();
     },
-    palette() { pal = (pal + 1) % PALETTES.length; mats.bin.color.setHex(PALETTES[pal].bin); mats.insert.color.setHex(PALETTES[pal].insert); },
+    palette() { pal = (pal + 1) % PALETTES.length; mats.bin.color.setHex(PALETTES[pal].bin); mats.insert.color.setHex(PALETTES[pal].insert); mats.lid.color.setHex(PALETTES[pal].lid); },
+    setLid(z) { lidZ = z; placeLid(); },
+    cycleLid() { lidMode = { on: 'apart', apart: 'off', off: 'on' }[lidMode]; placeLid(); return lidMode; },
   };
   new ResizeObserver(() => v.resize()).observe(el);
   v.resize();
@@ -935,11 +1025,17 @@ async function loadModels(meta) {
     firstFit = false;
     if (meta.has_insert) await S.viewer.load(`/api/sessions/${id}/insert.stl?t=${meta.stamp}`, 'insert', false);
     else S.viewer.clear('insert');
+    const lb = $('v-lid');
+    lb.classList.toggle('hidden', !meta.has_lid);
+    if (meta.has_lid) { S.viewer.setLid(meta.stats.lid_z); await S.viewer.load(`/api/sessions/${id}/lid.stl?t=${meta.stamp}`, 'lid', false); }
+    else S.viewer.clear('lid');
   } catch (e) { toast('No se pudo cargar la vista previa 3D', true); }
 }
 document.querySelectorAll('#vbar button').forEach((b) => b.addEventListener('click', () => {
   if (!S.viewer) return;
-  if (b.dataset.view === 'palette') S.viewer.palette(); else S.viewer.view(b.dataset.view);
+  if (b.dataset.view === 'palette') S.viewer.palette();
+  else if (b.dataset.view === 'lid') b.textContent = 'Tapa: ' + { on: 'montada', apart: 'separada', off: 'oculta' }[S.viewer.cycleLid()];
+  else S.viewer.view(b.dataset.view);
 }));
 
 /* ------------------------------------------------------------------ arranque */

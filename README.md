@@ -12,7 +12,7 @@ pip install -r requirements.txt
 ```
 
 Flujo: **Foto → Papel** (ajusta las 4 esquinas si hace falta) **→ Silueta** (elige qué objetos entran)
-**→ Bin** (editor como ShapeAny: formas arrastrables/rotables, muescas, bolsillo por forma, edición de contorno, chaflán, inserto de contraste, vista 3D y ZIP de STLs). Todo queda guardado en `data/` y reaparece en *Mis assets*.
+**→ Bin** (editor como ShapeAny: formas arrastrables/rotables, muescas, bolsillo por forma, edición de contorno, chaflán, inserto de contraste, vista 3D y ZIP de STLs). Además: **importar formas de otros proyectos** (menú `+` → *Importar de otro proyecto…*; el contorno se copia y la forma queda independiente) y **modo Hollow**: el bin se imprime abierto por arriba, con costillas alrededor de cada bolsillo y copas huecas en los pies (sin soportes), y una **tapa** aparte (STL) que se asienta en el escalón de las costillas y la pared; ajustes de costilla, suelo, grosor/asiento/holgura de la tapa. Todo queda guardado en `data/` y reaparece en *Mis assets*.
 
 > Sin autenticación: déjalo en `127.0.0.1`. Si lo expones en una red, ponle un proxy con login delante.
 

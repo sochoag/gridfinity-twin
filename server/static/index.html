@@ -138,6 +138,7 @@
           <button data-view="iso" title="Encuadrar">◇</button>
           <span class="sep"></span>
           <button data-view="palette" title="Cambiar colores">🎨</button>
+          <button data-view="lid" id="v-lid" title="Tapa: montada / separada / oculta" class="hidden">Tapa: montada</button>
         </div>
         <div id="bin-info" class="info"></div>
         <ul id="bin-warn" class="warn"></ul>
@@ -172,6 +173,18 @@
           <label>Ø magnet (mm)<input type="number" id="s-md" min="4" max="8.2" step="0.1"></label>
           <label>Depth (mm)<input type="number" id="s-mdep" min="1" max="4" step="0.1"></label>
         </div>
+        <h3 class="sec">Hollow &amp; lid</h3>
+        <label class="sw"><span>Hollow bin (saves material)</span><input type="checkbox" id="s-hollow"><i></i></label>
+        <div class="duo">
+          <label>Rib (mm)<input type="number" id="s-rib" min="1.2" max="6" step="0.1"></label>
+          <label>Floor (mm)<input type="number" id="s-hfloor" min="0.8" max="4" step="0.1"></label>
+        </div>
+        <div class="duo">
+          <label>Lid thickness (mm)<input type="number" id="s-lidt" min="0.8" max="3" step="0.1"></label>
+          <label>Lid seat (mm)<input type="number" id="s-ledge" min="0" max="3" step="0.1"></label>
+        </div>
+        <label>Lid clearance (mm)<input type="number" id="s-lidc" min="0" max="0.6" step="0.05"></label>
+        <p class="muted" id="s-hollow-info">El bin se imprime abierto por arriba (sin soportes) y la tapa lo cierra: se asienta sobre las costillas y el escalón de la pared.</p>
         <a class="link dl-extra" id="dl-svg" href="#" download>Descargar contorno SVG</a>
       </aside>
     </div>

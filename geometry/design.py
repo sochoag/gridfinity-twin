@@ -17,8 +17,10 @@ from shapely import affinity
 from shapely.geometry import MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
-from .gridfinity import (BIN_GAP, CORNER_R, FOOT_H, HEIGHT_UNIT, LIP_H, extrude_poly, lip_ring, make_shell,
-                         rounded_rect)
+from manifold3d import CrossSection, FillRule
+
+from .gridfinity import (BIN_GAP, CORNER_R, FOOT_H, FOOT_PROFILE, HEIGHT_UNIT, LIP_H, cylinder, extrude_poly, lip_ring,
+                         loft_rrect, make_shell, rounded_rect)
 
 DEFAULT_SETTINGS = {
     "auto_size": True, "grid_width": 4, "grid_depth": 4, "height_units": 3, "grid_unit_mm": 42.0,
@@ -26,6 +28,8 @@ DEFAULT_SETTINGS = {
     "contrast_insert": True, "insert_thickness_mm": 0.4, "fit_clearance_mm": 0.2,
     "wall_thickness_mm": 1.6, "stacking_lip": True,
     "magnet_holes": False, "magnet_diameter_mm": 6.5, "magnet_depth_mm": 2.4,
+    "hollow": False, "hollow_rib_mm": 2.0, "hollow_floor_mm": 1.2,
+    "lid_thickness_mm": 1.2, "lid_ledge_mm": 0.8, "lid_clearance_mm": 0.2,
 }
 MIN_FLOOR = 1.0
 FINGER_D = 16.0
@@ -42,12 +46,20 @@ class DesignResult:
     pockets: list
     warnings: list = field(default_factory=list)
     problems: dict = field(default_factory=dict)   # id de forma -> ["overlap" | "outside"]
+    lid: Manifold | None = None                    # tapa (modo hueco), plana sobre z=0
+    stats: dict = field(default_factory=dict)      # volumenes en cm3 (macizo / hueco / tapa)
 
 
 # ---------------------------------------------------------------- geometria de una forma
+def comp_of(comps: list[dict], sh: dict):
+    """Objeto detectado al que apunta la forma, o None si es una forma importada (lleva su propio contorno)."""
+    i = sh.get("comp")
+    return comps[i] if i is not None and 0 <= i < len(comps) else None
+
+
 def local_polygon(comp: dict, sh: dict) -> Polygon:
     """Poligono local de la forma (centrado, Y hacia abajo, con espejo aplicado, sin rotar)."""
-    if sh.get("outer"):
+    if sh.get("outer") or comp is None:
         p = Polygon(sh["outer"]).buffer(0)
         for h in sh.get("holes") or []:
             p = p.difference(Polygon(h).buffer(0))
@@ -148,6 +160,56 @@ def _poly_union(items):
     return g.buffer(0) if not g.is_valid else g
 
 
+def _hollow_parts(nw, nd, u, H, zone, pk_all, S, c_chamfer):
+    """Cavidades del modo hueco (se restan junto con los bolsillos).
+
+    Abierto por ARRIBA: sin puentes ni soportes al imprimir. Alrededor de cada bolsillo queda una costilla de
+    `hollow_rib_mm`; el suelo y los pies son copas huecas que se abren al cuerpo; la tapa se asienta en el
+    rebaje de la parte alta (las costillas terminan `lid_t` por debajo del borde del bin)."""
+    rib, bf = S["hollow_rib_mm"], S["hollow_floor_mm"]
+    wall = S["wall_thickness_mm"]
+    lid_t = max(S["lid_thickness_mm"], c_chamfer + 0.2)          # el chaflan del bolsillo vive en la tapa
+    l_out = max(0.0, min(S["lid_ledge_mm"], wall - 0.8))          # escalon sobre la pared exterior
+    z_body = FOOT_H + bf                                          # suelo de la cavidad del cuerpo
+    A = zone.difference(pk_all.buffer(rib, 12))
+    A = A.buffer(-0.5, 4).buffer(0.5, 4).simplify(0.03)           # quita rendijas < 1 mm (mallas degeneradas)
+    A = unary_union([g for g in (A.geoms if hasattr(A, "geoms") else [A]) if g.area > 6.0])
+    if A.is_empty:
+        return [], None, lid_t, l_out
+    parts = []
+    # cavidad del cuerpo
+    parts.append(extrude_poly(A, z_body, H - lid_t + 0.01))
+    # copas de los pies: contorno del pie recortado `rib`, abiertas hacia el cuerpo
+    cups = []
+    fw = rib
+    for i in range(nw):
+        for j in range(nd):
+            cx, cy = round((i - (nw - 1) / 2) * u, 4), round((j - (nd - 1) / 2) * u, 4)
+            z, off = 0.0, -round(sum(dx for _, dx in FOOT_PROFILE), 4)
+            for h, dx in FOOT_PROFILE:
+                cups.append(loft_rrect(u - BIN_GAP, u - BIN_GAP, CORNER_R, z, round(z + h, 4), round(off - fw, 4),
+                                       round(off + dx - fw, 4)).translate((cx, cy, 0)))
+                z, off = round(z + h, 4), round(off + dx, 4)
+            # prisma hecho con el mismo camino numerico (hull) que el pie: las aristas coinciden bit a bit
+            top = loft_rrect(u - BIN_GAP, u - BIN_GAP, CORNER_R, FOOT_H, round(FOOT_H + bf + 0.2, 4),
+                             round(-fw, 4), round(-fw, 4)).translate((cx, cy, 0))
+            cups.append(top)
+    cup = Manifold.batch_boolean(cups, 0)
+    box = Manifold.cube((nw * u + 10, nd * u + 10, FOOT_H + 0.2), center=True).translate((0, 0, bf + (FOOT_H + 0.2) / 2))
+    cup = cup ^ box                                                # fondo de las copas: `hollow_floor_mm`
+    cup = cup ^ extrude_poly(A, -0.5, z_body + 0.3)               # las costillas atraviesan los pies
+    if S["magnet_holes"]:
+        bosses = [cylinder((i - (nw - 1) / 2) * u + sx * (u / 2 - 8.0), (j - (nd - 1) / 2) * u + sy * (u / 2 - 8.0),
+                           -1.0, z_body + 1.0, S["magnet_diameter_mm"] + 2 * rib)
+                  for i in range(nw) for j in range(nd) for sx in (-1, 1) for sy in (-1, 1)]
+        cup = cup - Manifold.batch_boolean(bosses, 0)
+    parts.append(cup)
+    # rebaje de la tapa (toda la zona util + escalon sobre la pared exterior)
+    zone_ext = zone.buffer(l_out, 12) if l_out > 0 else zone
+    parts.append(extrude_poly(zone_ext, H - lid_t, H + 1.0))
+    return [p for p in parts if p is not None], zone_ext, lid_t, l_out
+
+
 def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult:
     S = {**DEFAULT_SETTINGS, **S}
     if not shapes:
@@ -157,7 +219,7 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
 
     items = []
     for sh in shapes:
-        comp = comps[sh["comp"]]
+        comp = comp_of(comps, sh)
         base = local_polygon(comp, sh)
         if sh.get("offset_mm"):
             base = base.buffer(sh["offset_mm"], 12)
@@ -219,26 +281,58 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
             warns.append(f"profundidad recortada a {H - z_bot:.1f} mm para dejar suelo ({it['id']})")
         groups.setdefault(round(z_bot, 3), []).append(it)
 
-    pockets_all, inserts, cutters = [], [], []
+    pockets_all, inserts, cutters, chamfer_src = [], [], [], []
     c = S["chamfer_mm"] if S["pocket_chamfer"] else 0.0
+    hollow = bool(S["hollow"])
+    if hollow:   # el rebaje de la tapa baja `lid_t` desde el borde: el bolsillo debe ser algo mas profundo
+        lid_need = max(S["lid_thickness_mm"], c + 0.2) + 1.0
+        if any(H - z > 0 and (H - z) < lid_need for z in groups):
+            warns.append(f"en modo hueco los bolsillos deben tener al menos {lid_need:.1f} mm de profundidad: se ajustaron")
+            fixed: dict[float, list] = {}
+            for z, its in groups.items():
+                fixed.setdefault(round(min(z, H - lid_need), 3), []).extend(its)
+            groups = fixed
     for z_bot, its in groups.items():
         full = _poly_union([i["full"] for i in its]).simplify(0.03)
         cutters.append(extrude_poly(full, z_bot, H + 1.0))
         if c > 0 and H - z_bot > c + 0.4:
-            slices = []
-            for k in range(CHAMFER_STEPS):
-                z0 = H - c + c * k / CHAMFER_STEPS
-                slices.append(extrude_poly(_clean(full.buffer(c * (k + 0.5) / CHAMFER_STEPS, 12)), z0, H + 1.0))
-            cutters += [s for s in slices if s is not None]
+            chamfer_src.append(full)
         if ins > 0:
             shape_only = _poly_union([i["pocket"] for i in its]).simplify(0.03)
-            cutters.append(extrude_poly(shape_only, z_bot - ins, z_bot + 0.01))
+            # 5 um mas chico que el bolsillo: paredes exactamente coplanares generan triangulos de area 0 (colineales)
+            # que el STL pierde al releerlo y dejan un agujero triangular en la malla
+            recess = shape_only.buffer(-0.005, 8)
+            cutters.append(extrude_poly(recess, z_bot - ins, z_bot + 0.01))
             ip = shape_only.buffer(-S["fit_clearance_mm"], 12)
             if not ip.is_empty:
                 inserts.append(extrude_poly(ip, z_bot - ins, z_bot))
         pockets_all.append(full)
 
-    solid = solid - Manifold.batch_boolean([c for c in cutters if c is not None], 0)   # un solo corte: evita intermedios degenerados
+    if chamfer_src:   # un unico juego de rebanadas para todos los grupos: bordes consistentes aunque las formas se solapen
+        cu = _poly_union(chamfer_src).simplify(0.03)
+        for k in range(CHAMFER_STEPS):
+            z0 = H - c + c * k / CHAMFER_STEPS
+            cutters.append(extrude_poly(_clean(cu.buffer(c * (k + 0.5) / CHAMFER_STEPS, 12)), z0, H + 1.0))
+    cutters = [c_ for c_ in cutters if c_ is not None]
+    lid = None
+    stats = {}
+    if hollow:
+        pk_all = _poly_union([it["full"] for it in items])
+        hparts, zone_ext, lid_t, l_out = _hollow_parts(nw, nd, u, H, zone, pk_all, S, c)
+        if hparts:
+            stats["lid_z"] = round(H - lid_t, 3)
+            stats["solid_cm3"] = round((solid - Manifold.batch_boolean(cutters, 0)).volume() / 1000, 2)
+            lid_cl = S["lid_clearance_mm"]
+            plate = zone_ext.buffer(-lid_cl, 12)
+            lid = extrude_poly(plate, H - lid_t, H) - Manifold.batch_boolean(cutters, 0)
+            lid = lid.translate((0, 0, -(H - lid_t)))
+            cutters += hparts
+        else:
+            warns.append("no queda espacio para vaciar el bin (las costillas ocupan todo): reduce el grosor de costilla")
+    solid = solid - Manifold.batch_boolean(cutters, 0)   # un solo corte: evita intermedios degenerados
+    if hollow and lid is not None:
+        stats["bin_cm3"] = round(solid.volume() / 1000, 2)
+        stats["lid_cm3"] = round(lid.volume() / 1000, 2)
 
     total_h = H
     if S["stacking_lip"]:
@@ -247,4 +341,4 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
     insert = Manifold.batch_boolean([m for m in inserts if m is not None], 0) if inserts else None
 
     return DesignResult(solid, insert, (nw, nd), (W, D), total_h, pockets_all, warns,
-                        {k: sorted(v) for k, v in problems.items()})
+                        {k: sorted(v) for k, v in problems.items()}, lid, stats)

@@ -222,3 +222,21 @@ label.sw > input:focus-visible + i { outline: 2px solid var(--accent); outline-o
 @media (max-width: 800px) {
   .ed-grid { grid-template-columns: 1fr; }
 }
+
+/* importar formas */
+.modal-ov { position: fixed; inset: 0; background: rgba(20,20,24,.45); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal { background: #fff; border-radius: 16px; width: min(760px, 100%); max-height: 86vh; display: flex; flex-direction: column; box-shadow: 0 24px 70px rgba(0,0,0,.35); }
+.modal-h, .modal-f { display: flex; align-items: center; gap: 10px; padding: 14px 18px; }
+.modal-h { border-bottom: 1px solid var(--line); font-size: 17px; }
+.modal-f { border-top: 1px solid var(--line); }
+.modal-b { padding: 8px 18px 16px; overflow: auto; }
+.imp-sec h4 { margin: 14px 0 8px; font-size: 14px; }
+.imp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+.imp-card { border: 2px solid var(--line); background: #fff; border-radius: 12px; padding: 8px; display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; font: inherit; font-size: 12px; color: var(--ink); }
+.imp-card:hover { border-color: #bdbab3; }
+.imp-card.on { border-color: var(--accent); background: #fff6f1; }
+.imp-thumb { width: 100%; height: 84px; }
+.imp-thumb path { fill: #3b3b3f; }
+
+.vbar #v-lid { width: auto; height: 36px; border-radius: 999px; padding: 0 14px; font-size: 13px; white-space: nowrap; margin-left: 6px; }
+.settings .muted { font-size: 12.5px; line-height: 1.4; margin: 10px 0 0; }

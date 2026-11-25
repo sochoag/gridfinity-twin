@@ -116,3 +116,45 @@ def test_basic_auth(monkeypatch):
     assert c.get("/api/sessions", auth=("otro", "s3cret")).status_code == 401
     assert c.get("/api/sessions", auth=("davo", "s3cret")).status_code == 200
     assert c.get("/", auth=("davo", "s3cret")).status_code == 200
+
+
+def test_hollow_lid_and_imported_shapes():
+    import io
+    import zipfile
+    st = _session()
+    sid = st["id"]
+    c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"})
+    des = c.post(f"/api/sessions/{sid}/design/init", json={"components": [0, 2]}).json()
+    # forma importada: lleva su propio contorno (comp=None), centrado en su caja
+    ring = [[-30, -8], [30, -8], [30, 8], [-30, 8]]
+    des["shapes"].append({"id": "imp1", "name": "Importada", "comp": None, "outer": ring, "holes": [], "x": 0, "y": 0, "rot": 0,
+                          "notch": {"on": False, "d": 16, "u": 0, "v": 0}})
+    des["settings"]["auto_size"] = True
+    r = c.put(f"/api/sessions/{sid}/design", json=des)
+    assert r.status_code == 200, r.text
+    assert r.json()["mesh"]["watertight"] and not r.json()["has_lid"]
+    # forma sin contorno ni comp: error claro
+    bad = {**des, "shapes": [{"id": "x", "name": "x", "comp": None, "x": 0, "y": 0}]}
+    assert c.put(f"/api/sessions/{sid}/design", json=bad).status_code == 422
+    # modo hueco: bin + tapa, ambas cerradas, y el bin pesa bastante menos
+    des["settings"]["hollow"] = True
+    r = c.put(f"/api/sessions/{sid}/design", json=des)
+    assert r.status_code == 200, r.text
+    m = r.json()
+    assert m["has_lid"] and m["lid"]["watertight"] and m["mesh"]["watertight"] and m["mesh"]["degenerate_faces"] == 0, m
+    assert m["stats"]["bin_cm3"] < 0.5 * m["stats"]["solid_cm3"]
+    assert 0.8 <= m["stats"]["lid_z"] and m["stats"]["lid_cm3"] > 5
+    tl = trimesh.load(io.BytesIO(c.get(f"/api/sessions/{sid}/lid.stl").content), file_type="stl")
+    assert tl.is_watertight and abs(tl.bounds[0][2]) < 1e-3 and 1.1 < tl.bounds[1][2] < 1.4
+    z = zipfile.ZipFile(io.BytesIO(c.get(f"/api/sessions/{sid}/bin.zip").content))
+    assert sorted(n.rsplit("_", 1)[1] for n in z.namelist()) == ["bin.stl", "insert.stl", "lid.stl"]
+    # con imanes: los bosses mantienen la malla cerrada
+    des["settings"]["magnet_holes"] = True
+    m = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert m["mesh"]["watertight"] and m["lid"]["watertight"], m
+    # apagar el modo hueco elimina la tapa vieja
+    des["settings"]["hollow"] = False
+    assert c.put(f"/api/sessions/{sid}/design", json=des).json()["has_lid"] is False
+    assert c.get(f"/api/sessions/{sid}/lid.stl").status_code == 404
+    # arrange tambien acepta formas importadas
+    assert len(c.post(f"/api/sessions/{sid}/design/arrange", json=des).json()) == 3
