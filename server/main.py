@@ -205,7 +205,7 @@ class SettingsIn(BaseModel):
 
 class DesignIn(BaseModel):
     settings: SettingsIn = SettingsIn()
-    shapes: list[ShapeIn] = Field(..., min_length=1, max_length=40)
+    shapes: list[ShapeIn] = Field(default_factory=list, max_length=40)
 
 
 class InitIn(BaseModel):
@@ -447,6 +447,7 @@ def _safe_name(st: dict, bid: str = MAIN_BIN) -> str:
 class BinIn(BaseModel):
     name: Optional[str] = Field(None, max_length=60)
     copy_from: Optional[str] = None
+    mode: Optional[Literal["complement", "empty"]] = None   # complement: Partial Bin que rellena el hueco de copy_from; empty: contenedor sin siluetas
 
 
 @app.get("/api/sessions/{sid}/bins")
@@ -473,7 +474,25 @@ def bins_create(sid: str, body: BinIn):
         n += 1
     bid = f"b{n}"
     design = None
-    if body.copy_from:
+    if body.mode:
+        src = holder(st, bin_id(body.copy_from))
+        sd = src.get("design")
+        if not sd:
+            raise HTTPException(422, "el bin de origen aun no tiene diseno")
+        S0 = {**DEFAULT_SETTINGS, **sd["settings"]}
+        meta = src.get("bin_meta")
+        gw, gd = (meta["grid"] if (S0["auto_size"] and meta) else (S0["grid_width"], S0["grid_depth"]))
+        S1 = {**S0, "auto_size": False, "grid_width": int(gw), "grid_depth": int(gd), "hollow": False,
+              "dividers_x": [], "dividers_y": []}
+        if body.mode == "complement":
+            off = set(S0["cells_off"]) if S0["partial"] else set()
+            if not off:
+                raise HTTPException(422, "el bin de origen no es parcial: activa Partial bin y apaga alguna celda")
+            S1.update(partial=True, cells_off=[f"{i},{j}" for j in range(gd) for i in range(gw) if f"{i},{j}" not in off])
+        else:
+            S1.update(partial=False, cells_off=[])
+        design = {"settings": S1, "shapes": []}
+    elif body.copy_from:
         src = holder(st, bin_id(body.copy_from)).get("design")
         design = json.loads(json.dumps(src)) if src else None
     bins[bid] = {"name": (body.name or f"Bin {n}").strip() or f"Bin {n}", "design": design, "bin_meta": None}

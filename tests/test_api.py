@@ -104,7 +104,7 @@ def test_validation():
     assert c.put(f"/api/sessions/{sid}/design", json={"settings": {"magnet_diameter_mm": 20}, "shapes": [sh]}).status_code == 422
     assert c.put(f"/api/sessions/{sid}/design", json={"shapes": [sh, sh]}).status_code == 422       # ids repetidos
     assert c.put(f"/api/sessions/{sid}/design", json={"shapes": [{"id": "a", "comp": 99}]}).status_code == 422
-    assert c.put(f"/api/sessions/{sid}/design", json={"shapes": []}).status_code == 422
+    assert c.put(f"/api/sessions/{sid}/design", json={"shapes": []}).status_code == 200      # sin formas = contenedor abierto
 
 
 def test_basic_auth(monkeypatch):
@@ -429,3 +429,31 @@ def test_library_and_merge():
     assert c.post("/api/sessions/merge", json={"ids": [s1, s1]}).status_code == 422
     assert c.post("/api/sessions/merge", json={"ids": [s1]}).status_code == 422
     assert c.get("/api/sessions").json()   # el listado sigue funcionando
+
+
+def test_empty_container_and_complement():
+    sid, _ = _traced()
+    des = c.post(f"/api/sessions/{sid}/design/init", json={"components": [0]}).json()
+    des["settings"].update(auto_size=False, grid_width=3, grid_depth=3, partial=True, cells_off=["2,0", "2,1"])
+    des["shapes"][0].update(x=-20, y=0)
+    assert c.put(f"/api/sessions/{sid}/design", json=des).status_code == 200
+    # complemento: celdas invertidas, sin siluetas, mismo grid
+    r = c.post(f"/api/sessions/{sid}/bins", json={"copy_from": "b1", "mode": "complement"})
+    assert r.status_code == 200, r.text
+    d2 = r.json()["design"]
+    assert d2["shapes"] == [] and d2["settings"]["partial"] and d2["settings"]["auto_size"] is False
+    assert sorted(d2["settings"]["cells_off"]) == sorted(f"{i},{j}" for j in range(3) for i in range(3) if f"{i},{j}" not in ("2,0", "2,1"))
+    d2["settings"].update(dividers_y=[-21])
+    m = c.put(f"/api/sessions/{sid}/design?bin=b2", json=d2)
+    assert m.status_code == 200, m.text
+    m = m.json()
+    assert m["mesh"]["watertight"] and m["has_dividers"] and not m["has_insert"] and m["grid"] == [3, 3]
+    # el complemento es un hueco real (menos volumen que un bin macizo del mismo tamano) y los divisores funcionan
+    sol = c.post(f"/api/sessions/{sid}/bins", json={"copy_from": "b1", "mode": "empty"}).json()["design"]
+    assert sol["shapes"] == [] and sol["settings"]["partial"] is False
+    me = c.put(f"/api/sessions/{sid}/design?bin=b3", json=sol).json()
+    assert me["mesh"]["watertight"] and me["mesh"]["volume_cm3"] < 200
+    # origen no parcial: el complemento se rechaza
+    des["settings"].update(partial=False, cells_off=[])
+    c.put(f"/api/sessions/{sid}/design", json=des)
+    assert c.post(f"/api/sessions/{sid}/bins", json={"copy_from": "b1", "mode": "complement"}).status_code == 422

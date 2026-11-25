@@ -318,8 +318,7 @@ def _blade_row(blades):
 
 def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult:
     S = {**DEFAULT_SETTINGS, **S}
-    if not shapes:
-        raise ValueError("el bin no tiene formas")
+    container = not shapes          # sin siluetas: contenedor de cavidad abierta (tornillos, piezas sueltas, divisores)
     warns, problems = [], {}
     u, wall = S["grid_unit_mm"], S["wall_thickness_mm"]
 
@@ -346,7 +345,7 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
             if items[i]["full"].intersection(items[j]["full"]).area > 0.5:
                 problems.setdefault(items[i]["id"], set()).add("overlap")
                 problems.setdefault(items[j]["id"], set()).add("overlap")
-    allu = unary_union([it["full"] for it in items])
+    allu = unary_union([it["full"] for it in items]) if items else Polygon()
 
     partial = bool(S["partial"])
     cells_off = set()
@@ -356,6 +355,11 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
             cells_off.add((int(a), int(b)))
         except ValueError:
             pass
+    if container:
+        S["auto_size"] = False                      # sin formas no hay nada que medir: rejilla fija
+        if S["hollow"]:
+            warns.append("un bin sin siluetas ya es un contenedor abierto: el modo hueco se ignoro")
+            S["hollow"] = False
     if partial:
         S["auto_size"] = False                      # las celdas se numeran desde la esquina: la rejilla debe ser fija
 
@@ -402,7 +406,7 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
     solid = make_shell(nw, nd, u, H, S["magnet_holes"], S["magnet_diameter_mm"], S["magnet_depth_mm"], cells if is_partial else None)
 
     # --- bolsillos agrupados por profundidad
-    ins = S["insert_thickness_mm"] if S["contrast_insert"] else 0.0
+    ins = S["insert_thickness_mm"] if (S["contrast_insert"] and not container) else 0.0
     floor_min = FOOT_H + MIN_FLOOR + ins
     groups: dict[float, list] = {}
     for it in items:
@@ -444,6 +448,12 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
         for k in range(CHAMFER_STEPS):
             z0 = H - c + c * k / CHAMFER_STEPS
             cutters.append(extrude_poly(_clean(cu.buffer(c * (k + 0.5) / CHAMFER_STEPS, 12)), z0, H + 1.0))
+    if container:   # una sola cavidad abierta que ocupa toda la zona util (la profundidad es la del bolsillo por defecto)
+        z_bot = max(H - float(S["pocket_depth_mm"]), floor_min)
+        cutters.append(extrude_poly(zone.buffer(-1e-6).buffer(0), z_bot, H + 1.0))
+        pockets_all.append(zone)
+        if H - z_bot < 3.0:
+            warns.append("la cavidad es muy poco profunda: sube la altura del bin o reduce el suelo")
     cutters = [c_ for c_ in cutters if c_ is not None]
     lid = None
     stats = {}

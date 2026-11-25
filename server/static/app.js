@@ -507,11 +507,12 @@ function binGrid() {
 }
 function groupBBox() {
   let b = [Infinity, Infinity, -Infinity, -Infinity];
+  if (!SHAPES().length) return [0, 0, 0, 0];
   for (const sh of SHAPES()) { const q = bboxOf(sh); b = [Math.min(b[0], q[0]), Math.min(b[1], q[1]), Math.max(b[2], q[2]), Math.max(b[3], q[3])]; }
   return b;
 }
 function recenterGroup() {
-  if (!CFG().auto_size) return;
+  if (!CFG().auto_size || !SHAPES().length) return;
   const c = bcenter(groupBBox());
   for (const sh of SHAPES()) { sh.x = r2(sh.x - c[0]); sh.y = r2(sh.y - c[1]); }
 }
@@ -982,7 +983,11 @@ async function openVector() {
   inp.click();
 }
 function deleteShape(id) {
-  if (SHAPES().length <= 1) return toast('El bin necesita al menos una forma', true);
+  if (SHAPES().length <= 1) {   // sin siluetas el bin pasa a ser un contenedor abierto: la rejilla se fija
+    const [a, b] = binGrid();
+    CFG().auto_size = false; CFG().grid_width = a; CFG().grid_depth = b;
+    toast('Bin sin siluetas: ahora es un contenedor abierto (usa divisores para dividirlo)');
+  }
   D().shapes = SHAPES().filter((s) => s.id !== id);
   if (E.sel === id) { E.sel = null; E.tool = null; E.pts = false; }
   recenterGroup();
@@ -1253,6 +1258,7 @@ $('lay-svg').addEventListener('keydown', (e) => {
 $('btn-undo').addEventListener('click', undo);
 $('btn-redo').addEventListener('click', redo);
 $('btn-arrange').addEventListener('click', async () => {
+  if (!SHAPES().length) return toast('No hay formas que ordenar', true);
   const res = await busy('Ordenando…', () => api(`/api/sessions/${S.st.id}/design/arrange`, { method: 'POST', headers: JSON_HDR, body: JSON.stringify({ settings: CFG(), shapes: SHAPES() }) }));
   if (!res) return;
   for (const r of res) { const sh = SHAPES().find((s) => s.id === r.id); if (sh) { sh.x = r.x; sh.y = r.y; sh.rot = r.rot; } }
@@ -1377,7 +1383,7 @@ async function switchBin(bid) {
 }
 async function newBin(opts) {
   await flushBuild();
-  const body = { copy_from: opts.copy ? S.bin : null, name: opts.name || null };
+  const body = { copy_from: opts.copy || opts.mode ? S.bin : null, name: opts.name || null, mode: opts.mode || null };
   const nb = await busy('Creando el bin…', () => api(`/api/sessions/${S.st.id}/bins`, { method: 'POST', headers: JSON_HDR, body: JSON.stringify(body) }));
   if (!nb) return;
   if (opts.comps) S.sel = new Set(opts.comps);
@@ -1426,6 +1432,12 @@ function renderBinTabs() {
       { label: 'Bin con todos los objetos', fn: () => newBin({ comps: S.st.contours.components.map((c) => c.id) }) },
       ...S.st.contours.components.map((c) => ({ label: `Bin solo con el objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => newBin({ comps: [c.id] }) })),
       '-', { label: 'Duplicar el bin actual', fn: () => newBin({ copy: true }) },
+      { label: 'Complemento del bin actual (Partial bin, vacío)', fn: () => {
+        const c = CFG();
+        if (!c.partial || !(c.cells_off || []).length) return toast('Activa Partial bin y apaga alguna celda: el complemento rellena ese hueco', true);
+        newBin({ mode: 'complement', name: `${binList().find((x) => x.id === S.bin).name} · complemento` });
+      } },
+      { label: 'Contenedor vacío (sin siluetas, p. ej. tornillos)', fn: () => newBin({ mode: 'empty', name: 'Contenedor' }) },
     ]);
   });
   box.append(plus);
@@ -1433,10 +1445,17 @@ function renderBinTabs() {
 
 /* ---- v1.3: divisores sueltos (ranuras + láminas) */
 const parseList = (txt) => [...new Set(String(txt).split(/[;,\s]+/).filter((t) => t !== '').map(Number).filter((n) => Number.isFinite(n) && Math.abs(n) < 500).map((n) => Math.round(n * 10) / 10))].sort((a, b) => a - b).slice(0, 20);
-function evenDividers(axis, n) {
-  const c = CFG(), [gw, gd] = binGrid(), u = c.grid_unit_mm;
-  const half = ((axis === 'x' ? gw : gd) * u - 0.5) / 2 - c.wall_thickness_mm;
-  return Array.from({ length: n }, (_, k) => Math.round((-half + ((k + 1) * 2 * half) / (n + 1)) * 10) / 10);
+function evenDividers(axis, n) {   // reparte dentro de las celdas activas (en un bin parcial, solo en su caja)
+  const c = CFG(), [gw, gd] = binGrid(), u = c.grid_unit_mm, off = cellsOff();
+  let i0 = 0, i1 = gw - 1, j0 = 0, j1 = gd - 1;
+  if (off.size) {
+    const act = [];
+    for (let j = 0; j < gd; j++) for (let i = 0; i < gw; i++) if (!off.has(`${i},${j}`)) act.push([i, j]);
+    if (act.length) { i0 = Math.min(...act.map((a) => a[0])); i1 = Math.max(...act.map((a) => a[0])); j0 = Math.min(...act.map((a) => a[1])); j1 = Math.max(...act.map((a) => a[1])); }
+  }
+  const [a0, a1, g] = axis === 'x' ? [i0, i1, gw] : [j0, j1, gd];
+  const lo = (a0 - g / 2) * u + 0.25 + c.wall_thickness_mm, hi = ((a1 + 1) - g / 2) * u - 0.25 - c.wall_thickness_mm;
+  return Array.from({ length: n }, (_, k) => Math.round((lo + ((k + 1) * (hi - lo)) / (n + 1)) * 10) / 10);
 }
 for (const [axis, nId, tId, key] of [['x', 's-dxn', 's-dxs', 'dividers_x'], ['y', 's-dyn', 's-dys', 'dividers_y']]) {
   $(nId).addEventListener('change', () => {
