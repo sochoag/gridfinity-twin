@@ -523,3 +523,19 @@ def test_testprint():
         m = trimesh.load(io.BytesIO(t.content), file_type="stl")
         assert abs(m.bounds[1][2] - 0.4) < 1e-3 and m.is_watertight and m.volume > minv
     assert c.get(f"/api/sessions/{sid}/testprint.stl?h=5").status_code == 422
+
+
+def test_silhouettes_and_favorites():
+    st = _session()
+    sid = st["id"]
+    c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"}).raise_for_status()
+    allv = c.get("/api/silhouettes").json()
+    mine = [s for s in allv if s.get("sid") == sid]
+    assert len(mine) == 4 and all(s["source"] == "project" and s["outer"] for s in mine)
+    key = mine[0]["key"]
+    assert c.patch("/api/silhouettes/meta", json={"key": key, "fav": True}).json()["fav"] is True
+    assert c.patch("/api/silhouettes/meta", json={"key": key, "name": "Mi cuchilla"}).status_code == 200
+    got = {s["key"]: s for s in c.get("/api/silhouettes").json()}[key]
+    assert got["fav"] is True and got["name"] == "Mi cuchilla"
+    assert c.patch("/api/silhouettes/meta", json={"key": "../x", "fav": True}).status_code == 422
+    c.patch("/api/silhouettes/meta", json={"key": key, "fav": False})

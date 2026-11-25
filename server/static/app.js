@@ -144,7 +144,7 @@ document.querySelectorAll('.htabs [data-ht]').forEach((b) => b.addEventListener(
 async function refreshAssets() {
   let list = [];
   try { list = await api('/api/sessions'); } catch (e) { toast(e.message, true); }
-  try { HOME.lib = await api('/api/library'); } catch { HOME.lib = []; }
+  try { HOME.lib = await api('/api/silhouettes'); } catch { HOME.lib = []; }
   $('cnt-img').textContent = list.filter((a) => a.has_photo && !a.merged).length;
   $('cnt-lib').textContent = HOME.lib.length;
   $('cnt-proj').textContent = list.length;
@@ -188,40 +188,72 @@ function renderImages(list) {
   }
 }
 
-function renderGallery() {
-  const grid = $('gal-grid'), q = $('gal-q').value.trim().toLowerCase(), items = HOME.lib;
-  const tags = [...new Set(items.flatMap((i) => i.tags))].sort();
-  $('gal-chips').replaceChildren(...tags.map((t) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'chip' + (t === HOME.tag ? ' on' : ''); b.textContent = t; b.addEventListener('click', () => { HOME.tag = HOME.tag === t ? '' : t; renderGallery(); }); return b; }));
-  grid.replaceChildren();
-  if (!items.length) { grid.innerHTML = '<p class="muted">Aún no hay siluetas guardadas. En el editor del bin, abre el menú «···» de una forma y elige «Guardar en la biblioteca».</p>'; return; }
-  const list = items.filter((i) => (!HOME.tag || i.tags.includes(HOME.tag)) && (!q || i.name.toLowerCase().includes(q) || i.tags.some((t) => t.includes(q))));
-  if (!list.length) { grid.innerHTML = '<p class="muted">Sin resultados.</p>'; return; }
-  for (const it of list) {
-    const card = document.createElement('div');
-    card.className = 'gal-card'; card.dataset.lib = it.id;
-    const th = thumbSvg({ outer: it.outer, holes: it.holes, bbox: it.bbox });
-    th.classList.add('gal-thumb'); th.setAttribute('role', 'button'); th.setAttribute('tabindex', '0'); th.setAttribute('aria-label', `Ver ${it.name}`);
-    th.addEventListener('click', () => viewSilhouette(it));
-    th.addEventListener('keydown', (e) => { if (e.key === 'Enter') viewSilhouette(it); });
-    const name = inlineName(it.name, async (v) => { Object.assign(it, await api(`/api/library/${it.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ name: v }) })); });
-    const dims = document.createElement('div'); dims.className = 'sub';
-    dims.textContent = `${it.bbox.width.toFixed(0)} × ${it.bbox.height.toFixed(0)} mm` + (it.holes.length ? ` · ${it.holes.length} hueco${it.holes.length === 1 ? '' : 's'}` : '');
+function galCard(it) {
+  const card = document.createElement('div');
+  card.className = 'gal-card'; card.dataset.key = it.key; card.dataset.source = it.source;
+  const th = thumbSvg({ outer: it.outer, holes: it.holes, bbox: it.bbox });
+  th.classList.add('gal-thumb'); th.setAttribute('role', 'button'); th.setAttribute('tabindex', '0'); th.setAttribute('aria-label', `Ver ${it.name}`);
+  th.addEventListener('click', () => viewSilhouette(it));
+  th.addEventListener('keydown', (e) => { if (e.key === 'Enter') viewSilhouette(it); });
+  const star = document.createElement('button');
+  star.type = 'button'; star.className = 'star' + (it.fav ? ' on' : ''); star.textContent = it.fav ? '★' : '☆';
+  star.title = it.fav ? 'Quitar de favoritas' : 'Marcar como favorita'; star.setAttribute('aria-label', star.title); star.setAttribute('aria-pressed', !!it.fav);
+  star.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try { await api('/api/silhouettes/meta', { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ key: it.key, fav: !it.fav }) }); it.fav = !it.fav; renderGallery(); } catch (er) { toast(er.message, true); }
+  });
+  const wrap = document.createElement('div'); wrap.className = 'gal-th'; wrap.append(th, star);
+  const name = inlineName(it.name, async (v) => {
+    if (it.source === 'lib') await api(`/api/library/${it.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ name: v }) });
+    else await api('/api/silhouettes/meta', { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ key: it.key, name: v }) });
+    it.name = v;
+  });
+  const dims = document.createElement('div'); dims.className = 'sub';
+  dims.textContent = `${it.bbox.width.toFixed(0)} × ${it.bbox.height.toFixed(0)} mm` + (it.holes.length ? ` · ${it.holes.length} hueco${it.holes.length === 1 ? '' : 's'}` : '') + (it.source === 'lib' ? ' · guardada' : ' · de foto');
+  card.append(wrap, name, dims);
+  if (it.source === 'lib') {
     const tg = document.createElement('input');
     tg.className = 'name tags'; tg.value = it.tags.join(', '); tg.placeholder = 'etiquetas, separadas, por comas'; tg.setAttribute('aria-label', 'Etiquetas');
     tg.addEventListener('keydown', (e) => { if (e.key === 'Enter') tg.blur(); });
     tg.addEventListener('change', async () => {
-      try { Object.assign(it, await api(`/api/library/${it.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ tags: tg.value.split(',') }) })); tg.value = it.tags.join(', '); renderGalleryChips(); } catch (e) { toast(e.message, true); }
+      try { const r = await api(`/api/library/${it.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ tags: tg.value.split(',') }) }); it.tags = r.tags; tg.value = it.tags.join(', '); renderGallery(); } catch (e) { toast(e.message, true); }
     });
-    const acts = document.createElement('div'); acts.className = 'acts';
-    const view = document.createElement('button'); view.className = 'btn small'; view.textContent = 'Ver'; view.addEventListener('click', () => viewSilhouette(it));
-    const del = document.createElement('button'); del.className = 'btn small danger'; del.textContent = 'Borrar';
-    armedDelete(del, 'Borrar', async () => { try { await api(`/api/library/${it.id}`, { method: 'DELETE' }); HOME.lib = HOME.lib.filter((x) => x.id !== it.id); $('cnt-lib').textContent = HOME.lib.length; renderGallery(); } catch (e) { toast(e.message, true); } });
-    acts.append(view, del);
-    card.append(th, name, dims, tg, acts);
-    grid.append(card);
+    card.append(tg);
+  } else {
+    const pj = document.createElement('div'); pj.className = 'sub'; pj.textContent = `Proyecto: ${it.project}`; card.append(pj);
   }
+  const acts = document.createElement('div'); acts.className = 'acts';
+  const view = document.createElement('button'); view.className = 'btn small'; view.textContent = 'Ver'; view.addEventListener('click', () => viewSilhouette(it));
+  acts.append(view);
+  if (it.source === 'project') {
+    const op = document.createElement('button'); op.className = 'btn small'; op.textContent = 'Abrir proyecto'; op.addEventListener('click', () => openSession(it.sid));
+    acts.append(op);
+  } else {
+    const del = document.createElement('button'); del.className = 'btn small danger'; del.textContent = 'Borrar';
+    armedDelete(del, 'Borrar', async () => { try { await api(`/api/library/${it.id}`, { method: 'DELETE' }); HOME.lib = HOME.lib.filter((x) => x.key !== it.key); $('cnt-lib').textContent = HOME.lib.length; renderGallery(); } catch (e) { toast(e.message, true); } });
+    acts.append(del);
+  }
+  card.append(acts);
+  return card;
 }
-const renderGalleryChips = () => renderGallery();
+function renderGallery() {
+  const root = $('gal-grid'), q = $('gal-q').value.trim().toLowerCase(), items = HOME.lib;
+  const tags = [...new Set(items.flatMap((i) => i.tags))].sort();
+  $('gal-chips').replaceChildren(...tags.map((t) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'chip' + (t === HOME.tag ? ' on' : ''); b.textContent = t; b.addEventListener('click', () => { HOME.tag = HOME.tag === t ? '' : t; renderGallery(); }); return b; }));
+  root.replaceChildren();
+  if (!items.length) { root.innerHTML = '<p class="muted">Aún no hay siluetas. Sube una foto y aparecerán aquí; también puedes guardar formas con «Guardar en la biblioteca».</p>'; return; }
+  const list = items.filter((i) => (!HOME.tag || i.tags.includes(HOME.tag)) && (!q || i.name.toLowerCase().includes(q) || i.tags.some((t) => t.includes(q)) || (i.project || '').toLowerCase().includes(q)));
+  if (!list.length) { root.innerHTML = '<p class="muted">Sin resultados.</p>'; return; }
+  const section = (id, title, arr, empty) => {
+    const s = document.createElement('section'); s.className = 'gal-sec'; s.id = id;
+    const h = document.createElement('h3'); h.innerHTML = `${title} <span class="cnt">${arr.length}</span>`;
+    const g = document.createElement('div'); g.className = 'gal-grid';
+    if (arr.length) g.append(...arr.map(galCard)); else g.innerHTML = `<p class="muted">${empty}</p>`;
+    s.append(h, g); root.append(s);
+  };
+  section('gal-favs', '★ Favoritas', list.filter((i) => i.fav), 'Marca una silueta con la estrella (☆) para tenerla aquí a mano.');
+  section('gal-all', 'Todas las siluetas', list, '');
+}
 $('gal-q').addEventListener('input', renderGallery);
 function viewSilhouette(it) {
   const M = modalShell(it.name, 'Cerrar', true);

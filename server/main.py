@@ -927,6 +927,72 @@ def library_delete(lid: str):
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ galeria unificada de siluetas
+_META = LIB.with_name("silhouette_meta.json")
+_KEY_RE = re.compile(r"^(lib:[0-9a-f]{6,32}|sess:[A-Za-z0-9_-]{4,64}:\d{1,4})$")
+
+
+def _meta_read() -> dict:
+    try:
+        return json.loads(_META.read_text())
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+class SilMeta(BaseModel):
+    key: str = Field(..., max_length=100)
+    fav: Optional[bool] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=80)
+
+
+@app.get("/api/silhouettes")
+def silhouettes_all():
+    """Todas las siluetas: las guardadas en la biblioteca y las detectadas en cada foto (sin duplicar las de proyectos fusionados)."""
+    meta = _meta_read()
+    out = []
+    for it in sorted(_lib_read(), key=lambda i: -i["created"]):
+        v = _lib_view(it)
+        k = f"lib:{it['id']}"
+        out.append({"key": k, "source": "lib", "id": it["id"], "name": it["name"], "tags": it.get("tags", []),
+                    "outer": v["outer"], "holes": v["holes"], "bbox": v["bbox"], "created": it["created"],
+                    "depth_mm": it.get("depth_mm"), "offset_mm": it.get("offset_mm", 0), "notch": it.get("notch"),
+                    "fav": bool(meta.get(k, {}).get("fav"))})
+    for d in DATA.iterdir():
+        if not (d.is_dir() and SID_RE.match(d.name) and (d / "state.json").exists()):
+            continue
+        st = read_state(d)
+        if st.get("merged") or not st.get("contours"):
+            continue
+        for c in st["contours"]["components"]:
+            k = f"sess:{st['id']}:{c['id']}"
+            mm = meta.get(k, {})
+            out.append({"key": k, "source": "project", "sid": st["id"], "comp": c["id"], "project": st["name"],
+                        "name": mm.get("name") or f"{st['name']} · objeto {c['id'] + 1}", "tags": [],
+                        "outer": c["outer"], "holes": c["holes"], "bbox": c["bbox"], "created": st["created"],
+                        "fav": bool(mm.get("fav"))})
+    return out
+
+
+@app.patch("/api/silhouettes/meta")
+def silhouette_meta(body: SilMeta):
+    """Favorito / nombre de una silueta (clave 'lib:<id>' o 'sess:<sid>:<n>'). Las de la biblioteca se renombran con /api/library."""
+    if not _KEY_RE.match(body.key):
+        raise HTTPException(422, "clave de silueta invalida")
+    with _LIB_LOCK:
+        meta = _meta_read()
+        e = meta.setdefault(body.key, {})
+        if body.fav is not None:
+            e["fav"] = body.fav
+        if body.name is not None:
+            e["name"] = body.name.strip()
+        if not e.get("fav") and not e.get("name"):
+            meta.pop(body.key, None)
+        tmp = _META.with_suffix(".tmp")
+        tmp.write_text(json.dumps(meta))
+        tmp.replace(_META)
+    return {"ok": True, "key": body.key, "fav": bool(meta.get(body.key, {}).get("fav"))}
+
+
 @app.post("/api/vector/parse")
 async def vector_parse(file: UploadFile = File(...)):
     """SVG / DXF -> contornos en mm (sin guardar nada). El cliente elige cuales importar."""

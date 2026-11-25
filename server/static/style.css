@@ -513,3 +513,10 @@ label.sw > input:checked + i { background: var(--accent); }
 .bin-rows .name { max-width: 200px; flex: none; }
 .bin-rows .sub { flex: 1; min-width: 120px; }
 @media (max-width: 640px) { .bin-rows { margin-left: 0; } }
+.gal-sec { margin-bottom: 22px; }
+.gal-sec h3 { margin: 0 0 10px; font-size: 15px; }
+.gal-sec h3 .cnt { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--field); color: var(--muted); margin-left: 4px; }
+.gal-th { position: relative; }
+.star { position: absolute; top: 4px; right: 4px; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; }
+.star:hover { color: #f0b429; }
+.star.on { color: #f0b429; border-color: #f0b429; }
