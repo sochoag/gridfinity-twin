@@ -105,13 +105,59 @@ async function upload(file) {
 }
 
 /* ------------------------------------------------------------------ mis assets */
+const fmtDate = (t) => new Date(t * 1000).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' });
+function armedDelete(btn, label, action) {
+  let armed = false, t;
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!armed) { armed = true; btn.textContent = '¿Seguro?'; t = setTimeout(() => { armed = false; btn.textContent = label; }, 3000); return; }
+    clearTimeout(t); armed = false; btn.textContent = label;
+    await action();
+  });
+}
+function inlineName(value, onSave, label = 'Nombre') {
+  const inp = document.createElement('input');
+  inp.className = 'name'; inp.value = value; inp.maxLength = 80; inp.setAttribute('aria-label', label);
+  inp.addEventListener('click', (e) => e.stopPropagation());
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
+  inp.addEventListener('change', async () => {
+    const v = inp.value.trim();
+    if (!v) { inp.value = value; return; }
+    try { await onSave(v); value = v; } catch (e) { inp.value = value; toast(e.message, true); }
+  });
+  return inp;
+}
+const HOME = { tab: 'img', lib: [], tag: '' };
+try { HOME.tab = localStorage.getItem('twin.hometab') || 'img'; } catch { /* sin almacenamiento */ }
+function setHomeTab(t) {
+  if (!['img', 'lib', 'proj'].includes(t)) t = 'img';
+  HOME.tab = t;
+  try { localStorage.setItem('twin.hometab', t); } catch { /* sin almacenamiento */ }
+  for (const k of ['img', 'lib', 'proj']) {
+    $('ht-' + k).classList.toggle('hidden', k !== t);
+    $('ht-btn-' + k).setAttribute('aria-selected', k === t);
+    $('ht-btn-' + k).classList.toggle('on', k === t);
+  }
+}
+document.querySelectorAll('.htabs [data-ht]').forEach((b) => b.addEventListener('click', () => setHomeTab(b.dataset.ht)));
+
 async function refreshAssets() {
   let list = [];
   try { list = await api('/api/sessions'); } catch (e) { toast(e.message, true); }
+  try { HOME.lib = await api('/api/library'); } catch { HOME.lib = []; }
+  $('cnt-img').textContent = list.filter((a) => a.has_photo && !a.merged).length;
+  $('cnt-lib').textContent = HOME.lib.length;
+  $('cnt-proj').textContent = list.length;
+  setHomeTab(HOME.tab);
+  renderImages(list); renderGallery(); renderProjects(list);
+}
+
+function renderImages(list) {
   const box = $('assets');
   box.innerHTML = '';
-  if (!list.length) { box.innerHTML = '<p class="muted">Aún no hay nada guardado.</p>'; return; }
-  for (const a of list) {
+  const imgs = list.filter((a) => a.has_photo && !a.merged);
+  if (!imgs.length) { box.innerHTML = '<p class="muted">Aún no has subido ninguna foto.</p>'; return; }
+  for (const a of imgs) {
     const card = document.createElement('div');
     card.className = 'asset';
     const img = document.createElement('img');
@@ -120,44 +166,133 @@ async function refreshAssets() {
     img.addEventListener('click', () => openSession(a.id));
     const meta = document.createElement('div');
     meta.className = 'meta';
-    const name = document.createElement('input');
-    name.className = 'name'; name.value = a.name; name.maxLength = 80; name.setAttribute('aria-label', 'Nombre');
-    name.addEventListener('change', async () => {
-      const v = name.value.trim();
-      if (!v) { name.value = a.name; return; }
-      try { await api(`/api/sessions/${a.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ name: v }) }); a.name = v; } catch (e) { toast(e.message, true); }
-    });
+    const name = inlineName(a.name, async (v) => { await api(`/api/sessions/${a.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ name: v }) }); a.name = v; });
     const sub = document.createElement('div');
     sub.className = 'sub';
-    sub.textContent = a.traced ? `${a.n_components} objeto${a.n_components === 1 ? '' : 's'} · ${a.has_bin ? 'bin listo' : 'sin bin'}` : 'sin trazar';
+    sub.textContent = (a.traced ? `${a.n_components} objeto${a.n_components === 1 ? '' : 's'} · ${a.has_bin ? 'bin listo' : 'sin bin'}` : 'sin trazar') + ` · ${fmtDate(a.created)}`;
     const acts = document.createElement('div');
     acts.className = 'acts';
     const open = document.createElement('button');
     open.className = 'btn small primary'; open.textContent = 'Abrir';
     open.addEventListener('click', () => openSession(a.id));
+    const corners = document.createElement('button');
+    corners.className = 'btn small'; corners.textContent = 'Ajustar hoja'; corners.title = 'Volver a marcar las esquinas del papel';
+    corners.addEventListener('click', () => openSession(a.id, 'b1', 'corners'));
     const del = document.createElement('button');
-    del.className = 'btn small danger'; del.textContent = 'Eliminar';
-    let armed = false, t;
-    del.addEventListener('click', async () => {
-      if (!armed) { armed = true; del.textContent = '¿Seguro?'; t = setTimeout(() => { armed = false; del.textContent = 'Eliminar'; }, 3000); return; }
-      clearTimeout(t);
-      try { await api(`/api/sessions/${a.id}`, { method: 'DELETE' }); refreshAssets(); } catch (e) { toast(e.message, true); }
-    });
-    acts.append(open, del);
+    del.className = 'btn small danger'; del.textContent = 'Eliminar'; del.title = 'Elimina la foto y todo el proyecto (siluetas y bins)';
+    armedDelete(del, 'Eliminar', async () => { try { await api(`/api/sessions/${a.id}`, { method: 'DELETE' }); refreshAssets(); } catch (e) { toast(e.message, true); } });
+    acts.append(open, corners, del);
     meta.append(name, sub, acts);
     card.append(img, meta);
     box.append(card);
   }
 }
 
-async function openSession(id) {
+function renderGallery() {
+  const grid = $('gal-grid'), q = $('gal-q').value.trim().toLowerCase(), items = HOME.lib;
+  const tags = [...new Set(items.flatMap((i) => i.tags))].sort();
+  $('gal-chips').replaceChildren(...tags.map((t) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'chip' + (t === HOME.tag ? ' on' : ''); b.textContent = t; b.addEventListener('click', () => { HOME.tag = HOME.tag === t ? '' : t; renderGallery(); }); return b; }));
+  grid.replaceChildren();
+  if (!items.length) { grid.innerHTML = '<p class="muted">Aún no hay siluetas guardadas. En el editor del bin, abre el menú «···» de una forma y elige «Guardar en la biblioteca».</p>'; return; }
+  const list = items.filter((i) => (!HOME.tag || i.tags.includes(HOME.tag)) && (!q || i.name.toLowerCase().includes(q) || i.tags.some((t) => t.includes(q))));
+  if (!list.length) { grid.innerHTML = '<p class="muted">Sin resultados.</p>'; return; }
+  for (const it of list) {
+    const card = document.createElement('div');
+    card.className = 'gal-card'; card.dataset.lib = it.id;
+    const th = thumbSvg({ outer: it.outer, holes: it.holes, bbox: it.bbox });
+    th.classList.add('gal-thumb'); th.setAttribute('role', 'button'); th.setAttribute('tabindex', '0'); th.setAttribute('aria-label', `Ver ${it.name}`);
+    th.addEventListener('click', () => viewSilhouette(it));
+    th.addEventListener('keydown', (e) => { if (e.key === 'Enter') viewSilhouette(it); });
+    const name = inlineName(it.name, async (v) => { Object.assign(it, await api(`/api/library/${it.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ name: v }) })); });
+    const dims = document.createElement('div'); dims.className = 'sub';
+    dims.textContent = `${it.bbox.width.toFixed(0)} × ${it.bbox.height.toFixed(0)} mm` + (it.holes.length ? ` · ${it.holes.length} hueco${it.holes.length === 1 ? '' : 's'}` : '');
+    const tg = document.createElement('input');
+    tg.className = 'name tags'; tg.value = it.tags.join(', '); tg.placeholder = 'etiquetas, separadas, por comas'; tg.setAttribute('aria-label', 'Etiquetas');
+    tg.addEventListener('keydown', (e) => { if (e.key === 'Enter') tg.blur(); });
+    tg.addEventListener('change', async () => {
+      try { Object.assign(it, await api(`/api/library/${it.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ tags: tg.value.split(',') }) })); tg.value = it.tags.join(', '); renderGalleryChips(); } catch (e) { toast(e.message, true); }
+    });
+    const acts = document.createElement('div'); acts.className = 'acts';
+    const view = document.createElement('button'); view.className = 'btn small'; view.textContent = 'Ver'; view.addEventListener('click', () => viewSilhouette(it));
+    const del = document.createElement('button'); del.className = 'btn small danger'; del.textContent = 'Borrar';
+    armedDelete(del, 'Borrar', async () => { try { await api(`/api/library/${it.id}`, { method: 'DELETE' }); HOME.lib = HOME.lib.filter((x) => x.id !== it.id); $('cnt-lib').textContent = HOME.lib.length; renderGallery(); } catch (e) { toast(e.message, true); } });
+    acts.append(view, del);
+    card.append(th, name, dims, tg, acts);
+    grid.append(card);
+  }
+}
+const renderGalleryChips = () => renderGallery();
+$('gal-q').addEventListener('input', renderGallery);
+function viewSilhouette(it) {
+  const M = modalShell(it.name, 'Cerrar', true);
+  const th = thumbSvg({ outer: it.outer, holes: it.holes, bbox: it.bbox });
+  th.classList.add('gal-big');
+  const info = document.createElement('p');
+  info.className = 'muted';
+  info.textContent = `${it.bbox.width.toFixed(1)} × ${it.bbox.height.toFixed(1)} mm · ${it.outer.length} puntos · ${it.holes.length} hueco${it.holes.length === 1 ? '' : 's'}` +
+    (it.depth_mm ? ` · profundidad ${it.depth_mm} mm` : '') + (it.offset_mm ? ` · offset ${it.offset_mm} mm` : '') + (it.notch && it.notch.on ? ' · con muesca para dedos' : '') + (it.tags.length ? ` · ${it.tags.join(', ')}` : '');
+  M.body.append(th, info);
+  M.go.disabled = false; M.go.addEventListener('click', M.close);
+}
+
+function renderProjects(list) {
+  const box = $('proj-list');
+  box.innerHTML = '';
+  if (!list.length) { box.innerHTML = '<p class="muted">Aún no hay proyectos.</p>'; return; }
+  for (const a of list) {
+    const p = document.createElement('div');
+    p.className = 'proj'; p.dataset.sid = a.id;
+    const head = document.createElement('div'); head.className = 'proj-h';
+    const img = document.createElement('img'); img.className = 'proj-img'; img.alt = ''; img.loading = 'lazy'; img.src = `/api/sessions/${a.id}/source.jpg`;
+    img.addEventListener('click', () => openSession(a.id));
+    const mid = document.createElement('div'); mid.className = 'proj-m';
+    const name = inlineName(a.name, async (v) => { await api(`/api/sessions/${a.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ name: v }) }); a.name = v; }, 'Nombre del proyecto');
+    const sub = document.createElement('div'); sub.className = 'sub';
+    sub.textContent = [a.merged ? 'fusión de proyectos' : 'foto', a.traced ? `${a.n_components} objeto${a.n_components === 1 ? '' : 's'}` : 'sin trazar', a.paper, fmtDate(a.created)].filter(Boolean).join(' · ');
+    mid.append(name, sub);
+    const acts = document.createElement('div'); acts.className = 'acts';
+    const open = document.createElement('button'); open.className = 'btn small primary'; open.textContent = 'Abrir'; open.addEventListener('click', () => openSession(a.id));
+    const del = document.createElement('button'); del.className = 'btn small danger'; del.textContent = 'Eliminar';
+    armedDelete(del, 'Eliminar', async () => { try { await api(`/api/sessions/${a.id}`, { method: 'DELETE' }); refreshAssets(); } catch (e) { toast(e.message, true); } });
+    acts.append(open, del);
+    head.append(img, mid, acts);
+    p.append(head);
+    const bins = a.bins.filter((b) => b.has_design || b.has_bin || b.id === 'b1');
+    if (a.traced) {
+      const ul = document.createElement('ul'); ul.className = 'bin-rows';
+      for (const b of bins) {
+        const li = document.createElement('li'); li.dataset.bin = b.id;
+        const bn = inlineName(b.name, async (v) => { await api(`/api/sessions/${a.id}/bins/${b.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ name: v }) }); b.name = v; }, 'Nombre del bin');
+        const det = document.createElement('span'); det.className = 'sub';
+        det.textContent = b.has_bin ? `${b.grid ? `${b.grid[0]}×${b.grid[1]}` : ''}${b.total_height_mm ? ` · ${b.total_height_mm} mm de alto` : ''} · ${b.n_shapes} forma${b.n_shapes === 1 ? '' : 's'}` : b.has_design ? 'diseñado, sin generar' : 'sin diseñar';
+        const ba = document.createElement('span'); ba.className = 'acts';
+        const bo = document.createElement('button'); bo.className = 'btn small'; bo.textContent = 'Abrir bin'; bo.addEventListener('click', () => openSession(a.id, b.id));
+        ba.append(bo);
+        if (b.has_bin) { const z = document.createElement('a'); z.className = 'btn small'; z.textContent = '⬇ STL'; z.href = `/api/sessions/${a.id}/bin.zip?bin=${b.id}`; z.download = ''; z.title = 'Descargar los STL de este bin (.zip)'; ba.append(z); }
+        if (b.id !== 'b1') {
+          const bd = document.createElement('button'); bd.className = 'btn small danger'; bd.textContent = 'Borrar';
+          armedDelete(bd, 'Borrar', async () => { try { await api(`/api/sessions/${a.id}/bins/${b.id}`, { method: 'DELETE' }); refreshAssets(); } catch (e) { toast(e.message, true); } });
+          ba.append(bd);
+        }
+        li.append(bn, det, ba);
+        ul.append(li);
+      }
+      p.append(ul);
+    }
+    box.append(p);
+  }
+}
+
+async function openSession(id, bid = 'b1', view = null) {
   const st = await busy('Abriendo…', () => api(`/api/sessions/${id}`));
   if (!st) return;
-  S.st = st; S.bin = 'b1';
+  S.bin = 'b1';
+  if (bid !== 'b1' && (st.bins || {})[bid]) { const h = st.bins[bid]; st.design = h.design || null; st.bin_meta = h.bin_meta || null; S.bin = bid; }
+  S.st = st;
   const ids = st.contours ? st.contours.components.map((c) => c.id) : [];
   const saved = st.design && st.design.shapes.map((x) => x.comp).filter((x) => x != null);
   S.sel = new Set(saved && saved.length ? saved.filter((i) => ids.includes(i)) : ids);
-  go(st.design ? 'bin' : st.contours ? 'shape' : 'corners');
+  go(view || (st.design ? 'bin' : st.contours ? 'shape' : 'corners'));
 }
 
 /* ------------------------------------------------------------------ paso 2: esquinas del papel */

@@ -255,15 +255,26 @@ def create_session(file: UploadFile = File(...), paper: str = Form("A4"),
     return st
 
 
+def _bin_summary(st: dict, bid: str) -> dict:
+    h = holder(st, bid)
+    meta = h.get("bin_meta") or {}
+    return {"id": bid, "name": bin_name(st, bid), "has_design": h.get("design") is not None, "has_bin": bool(meta),
+            "grid": meta.get("grid"), "size_mm": meta.get("size_mm"), "total_height_mm": meta.get("total_height_mm"),
+            "n_shapes": len((h.get("design") or {}).get("shapes") or [])}
+
+
 @app.get("/api/sessions")
 def list_sessions():
     out = []
     for d in DATA.iterdir():
         if d.is_dir() and SID_RE.match(d.name) and (d / "state.json").exists():
             st = read_state(d)
+            bins = [_bin_summary(st, MAIN_BIN)] + [_bin_summary(st, k) for k in sorted((st.get("bins") or {}), key=lambda x: int(x[1:]))]
             out.append({"id": st["id"], "name": st["name"], "created": st["created"],
-                        "traced": st.get("contours") is not None, "has_bin": st.get("bin_meta") is not None or any(b.get("bin_meta") for b in (st.get("bins") or {}).values()),
-                        "n_components": len(st["contours"]["components"]) if st.get("contours") else 0})
+                        "traced": st.get("contours") is not None, "has_bin": any(b["has_bin"] for b in bins),
+                        "n_components": len(st["contours"]["components"]) if st.get("contours") else 0,
+                        "has_photo": (d / "source.jpg").exists(), "merged": bool(st.get("merged")),
+                        "paper": (st.get("paper") or {}).get("name"), "bins": bins})
     return sorted(out, key=lambda s: -s["created"])
 
 

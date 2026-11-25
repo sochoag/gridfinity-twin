@@ -44,8 +44,23 @@
       </span>
     </div>
 
-    <div class="h2row"><h2>Mis assets</h2><button class="btn small" id="btn-merge" title="Crea un proyecto nuevo con las siluetas de varios proyectos ya trazados">⊕ Fusionar proyectos…</button></div>
-    <div id="assets" class="assets"><p class="muted">Aún no hay nada guardado.</p></div>
+    <div class="htabs" role="tablist" aria-label="Mi espacio">
+      <button role="tab" data-ht="img" id="ht-btn-img" aria-selected="true">🖼 Imágenes cargadas <span class="cnt" id="cnt-img">0</span></button>
+      <button role="tab" data-ht="lib" id="ht-btn-lib" aria-selected="false">✂ Galería de siluetas <span class="cnt" id="cnt-lib">0</span></button>
+      <button role="tab" data-ht="proj" id="ht-btn-proj" aria-selected="false">📦 Bins y proyectos <span class="cnt" id="cnt-proj">0</span></button>
+    </div>
+    <div class="hpanel" id="ht-img" role="tabpanel">
+      <p class="muted hpanel-h">Las fotos que has subido. Haz clic en una para abrir su proyecto, o cámbiale el nombre.</p>
+      <div id="assets" class="assets"><p class="muted">Aún no hay nada guardado.</p></div>
+    </div>
+    <div class="hpanel hidden" id="ht-lib" role="tabpanel">
+      <div class="lib-tools"><input type="search" id="gal-q" placeholder="Buscar por nombre o etiqueta…" aria-label="Buscar siluetas"><span id="gal-chips"></span></div>
+      <div class="gal-grid" id="gal-grid"><p class="muted">Cargando…</p></div>
+    </div>
+    <div class="hpanel hidden" id="ht-proj" role="tabpanel">
+      <div class="h2row"><p class="muted hpanel-h">Cada proyecto con los bins que has diseñado.</p><button class="btn small" id="btn-merge" title="Crea un proyecto nuevo con las siluetas de varios proyectos ya trazados">⊕ Fusionar proyectos…</button></div>
+      <div id="proj-list" class="proj-list"></div>
+    </div>
   </section>
 
   <!-- ========== ESQUINAS DEL PAPEL ========== -->
