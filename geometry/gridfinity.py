@@ -208,7 +208,10 @@ def lip_ring_poly(fp, H, step=0.2):
         for k in range(n):
             za, zb = z + h * k / n, z + h * (k + 1) / n
             inset = -(off0 + (off1 - off0) * (k + 0.5) / n)
-            cav.append(extrude_poly(fp.buffer(-inset, 12), round(H + za, 4), round(H + zb, 4)))
+            # las piezas se solapan 0.03 mm en z: caras coplanares que se tocan dejan laminas internas de espesor 0
+            lo = H + za - (0.03 if (k > 0 or z > 0) else 0.01)
+            hi = H + zb + (0.01 if (z + h >= 4.39 and k == n - 1) else 0.0)
+            cav.append(extrude_poly(fp.buffer(-inset, 12), round(lo, 4), round(hi, 4)))
         z = round(z + h, 4)
     return ring_outer - Manifold.batch_boolean([c for c in cav if c is not None], 0)
 

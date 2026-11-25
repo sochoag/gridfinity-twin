@@ -228,3 +228,18 @@ def test_partial_cell_row_orientation():
     ymin = m.bounds[0][1]
     low = m.vertices[m.vertices[:, 1] < ymin + 5]
     assert low[:, 0].min() > 10 or low[:, 0].max() < -10 or (low[:, 0] > 21).any() and (low[:, 0] < -21).any() and not ((low[:, 0] > -20) & (low[:, 0] < 20) & (low[:, 2] > 8)).any()
+
+
+def test_partial_lip_has_no_internal_sheets():
+    """El labio del bin parcial no debe dejar laminas horizontales de espesor 0 sobre toda la huella (se ven como tapa)."""
+    import io
+    st = _session()
+    sid = st["id"]
+    c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"})
+    des = c.post(f"/api/sessions/{sid}/design/init", json={"components": [2]}).json()
+    des["shapes"][0].update(x=0, y=-8)
+    des["settings"].update(auto_size=False, grid_width=3, grid_depth=4, partial=True, cells_off=["1,3"], hollow=True)
+    assert c.put(f"/api/sessions/{sid}/design", json=des).status_code == 200
+    m = trimesh.load(io.BytesIO(c.get(f"/api/sessions/{sid}/bin.stl").content), file_type="stl")
+    top = (m.face_normals[:, 2] > 0.9) & (m.triangles_center[:, 2] > 21.3) & (m.triangles_center[:, 2] < 24.5)
+    assert m.area_faces[top].sum() < 2000, m.area_faces[top].sum()
