@@ -243,3 +243,40 @@ def test_partial_lip_has_no_internal_sheets():
     m = trimesh.load(io.BytesIO(c.get(f"/api/sessions/{sid}/bin.stl").content), file_type="stl")
     top = (m.face_normals[:, 2] > 0.9) & (m.triangles_center[:, 2] > 21.3) & (m.triangles_center[:, 2] < 24.5)
     assert m.area_faces[top].sum() < 2000, m.area_faces[top].sum()
+
+
+def test_scale_by_reference_full_photo():
+    """Medir con 2 puntos: la foto completa se usa como 'papel' de dimensiones conocidas."""
+    st = _session()
+    sid = st["id"]
+    W, H = st["source"]["width"], st["source"]["height"]
+    # 5 px/mm -> la foto cubre (W/5) x (H/5) mm
+    long_mm, short_mm = max(W, H) / 5, min(W, H) / 5
+    body = {"corners": [[0, 0], [W, 0], [W, H], [0, H]], "paper": "custom", "paper_width_mm": long_mm, "paper_height_mm": short_mm}
+    r = c.post(f"/api/sessions/{sid}/trace", json=body)
+    assert r.status_code in (200, 422), r.text   # 422 solo si no hay objetos separados del borde
+    big = dict(body, paper_width_mm=5000, paper_height_mm=3000)
+    assert c.post(f"/api/sessions/{sid}/trace", json=big).status_code == 422
+
+
+def test_vector_import_svg_dxf():
+    import io as _io
+
+    import ezdxf
+    svg = (b'<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="60mm" viewBox="0 0 100 60">'
+           b'<path d="M10 10 H60 V50 H10 Z M20 20 H40 V40 H20 Z" fill-rule="evenodd"/><circle cx="80" cy="30" r="10"/></svg>')
+    r = c.post("/api/vector/parse", files={"file": ("a.svg", svg, "image/svg+xml")})
+    assert r.status_code == 200, r.text
+    sh = r.json()["shapes"]
+    assert r.json()["format"] == "svg" and len(sh) == 2
+    assert abs(sh[0]["bbox"]["width"] - 50) < 0.2 and abs(sh[0]["bbox"]["height"] - 40) < 0.2 and len(sh[0]["holes"]) == 1   # unidades: mm del viewBox
+    d = ezdxf.new()
+    d.header["$INSUNITS"] = 4
+    m = d.modelspace()
+    m.add_lwpolyline([(0, 0), (50, 0), (50, 30), (0, 30)], close=True)
+    m.add_line((100, 0), (130, 0)); m.add_line((130, 0), (130, 20)); m.add_arc((115, 20), 15, 0, 180); m.add_line((100, 20), (100, 0))
+    buf = _io.StringIO(); d.write(buf)
+    r = c.post("/api/vector/parse", files={"file": ("a.dxf", buf.getvalue().encode(), "application/dxf")})
+    assert r.status_code == 200 and len(r.json()["shapes"]) == 2, r.text   # polilinea + cadena de lineas/arco cerrada por polygonize
+    assert c.post("/api/vector/parse", files={"file": ("x.txt", b"hola", "text/plain")}).status_code == 422
+    assert c.post("/api/vector/parse", files={"file": ("e.svg", b'<svg xmlns="http://www.w3.org/2000/svg"><line x1="0" y1="0" x2="5" y2="5" stroke="black"/></svg>', "image/svg+xml")}).status_code == 422

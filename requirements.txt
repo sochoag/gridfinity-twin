@@ -10,3 +10,5 @@ trimesh>=4.0
 # Opcional: soporte de fotos HEIC (iPhone)
 # pillow-heif>=0.16
 networkx
+svgelements>=1.9
+ezdxf>=1.1

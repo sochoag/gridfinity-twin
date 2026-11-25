@@ -256,3 +256,17 @@ label.sw > input:focus-visible + i { outline: 2px solid var(--accent); outline-o
 .alignbar { margin-top: 8px; padding-top: 8px; gap: 6px; }
 .alignbar button { padding: 6px 11px; }
 .alignbar .lbl { font-size: 12px; color: #6b6b70; }
+
+.meas-line { stroke: #e0561a; stroke-dasharray: 6 4; pointer-events: none; }
+#measure-box .note { font-size: 12px; color: #6b6b70; }
+
+.modal.wide { width: min(860px, 100%); }
+.seg.sub, #mn-mode { display: inline-flex; gap: 4px; margin-bottom: 10px; }
+#mn-mode button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 6px 14px; cursor: pointer; font: inherit; }
+#mn-mode button.on { border-color: var(--accent); color: var(--accent); background: #fff6f0; }
+.mn-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin: 8px 0; }
+.mn-row label { display: flex; flex-direction: column; font-size: 12px; gap: 3px; }
+.mn-canvas { width: 100%; height: 260px; background: #f2f2f1; border-radius: 12px; display: block; }
+.mn-canvas.draw { cursor: crosshair; height: 300px; }
+label.inline { display: inline-flex; align-items: center; gap: 8px; margin: 6px 0 10px; font-size: 13px; }
+label.inline input { width: 80px; }

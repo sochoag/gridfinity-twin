@@ -167,13 +167,18 @@ function setPaper(name, w, h) {
     b.classList.toggle('on', on);
     b.setAttribute('aria-checked', on);
   });
-  $('pw').value = w; $('ph').value = h;
+  if (w && h) { $('pw').value = w; $('ph').value = h; }
   $('pw').disabled = $('ph').disabled = name !== 'custom';
+  $('measure-box').classList.toggle('hidden', name !== 'measure');
+  $('preset-box').classList.toggle('hidden', name === 'measure');
+  document.querySelector('#view-corners .row').classList.toggle('hidden', name === 'measure');
+  if (S.st && $('corner-svg').querySelector('image')) cornerLayer();
 }
 document.querySelectorAll('#paper-seg button').forEach((b) => b.addEventListener('click', () => {
   const p = b.dataset.paper;
   if (p === 'A4') setPaper('A4', 297, 210);
   else if (p === 'LETTER') setPaper('LETTER', 279.4, 215.9);
+  else if (p === 'measure') setPaper('measure', S.pw, S.ph);
   else setPaper('custom', +$('pw').value || 297, +$('ph').value || 210);
 }));
 $('pw').addEventListener('change', () => { S.pw = +$('pw').value; });
@@ -184,6 +189,7 @@ $('name').addEventListener('change', async () => {
   try { await api(`/api/sessions/${S.st.id}`, { method: 'PATCH', headers: JSON_HDR, body: JSON.stringify({ name: v }) }); S.st.name = v; } catch (e) { toast(e.message, true); }
 });
 
+const MEAS = { p1: null, p2: null };
 function renderCorners() {
   const st = S.st;
   const { width: W, height: H } = st.source;
@@ -191,20 +197,61 @@ function renderCorners() {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.replaceChildren();
   svg.append(svgEl('image', { href: `/api/sessions/${st.id}/source.jpg`, width: W, height: H }));
-  const quad = svgEl('polygon', { class: 'paper-quad' });
+  MEAS.p1 = [W * 0.35, H * 0.5]; MEAS.p2 = [W * 0.65, H * 0.5];
+  $('name').value = st.name;
+  $('corner-note').classList.toggle('hidden', st.corners_detected !== false);
+  setPaper(st.paper.name || 'A4', st.paper.width_mm, st.paper.height_mm);
+  cornerLayer();
+}
+const svgPoint = (svg, e) => { const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; return pt.matrixTransform(svg.getScreenCTM().inverse()); };
+function measInfo() {
+  const mm = +$('meas-mm').value, px = Math.hypot(MEAS.p2[0] - MEAS.p1[0], MEAS.p2[1] - MEAS.p1[1]);
+  const { width: W, height: H } = S.st.source;
+  $('meas-info').textContent = mm > 0 && px > 5 ? `${(px / mm).toFixed(2)} px/mm · la foto cubre ${(W / (px / mm)).toFixed(0)} × ${(H / (px / mm)).toFixed(0)} mm` : '';
+}
+function cornerLayer() {
+  const st = S.st, svg = $('corner-svg');
+  const { width: W, height: H } = st.source;
+  svg.querySelectorAll('.cl').forEach((n) => n.remove());
+  const r = Math.max(W, H) * 0.012;
+  if (S.paperName === 'measure') {
+    const line = svgEl('line', { class: 'cl meas-line', 'stroke-width': r * 0.35 });
+    const draw = () => { line.setAttribute('x1', MEAS.p1[0]); line.setAttribute('y1', MEAS.p1[1]); line.setAttribute('x2', MEAS.p2[0]); line.setAttribute('y2', MEAS.p2[1]); measInfo(); };
+    svg.append(line);
+    ['p1', 'p2'].forEach((k, i) => {
+      const h = svgEl('circle', { class: 'cl corner-handle', r, cx: MEAS[k][0], cy: MEAS[k][1], tabindex: 0, 'aria-label': `Marcador ${i + 1}`, role: 'slider' });
+      h.addEventListener('pointerdown', (e) => { h.setPointerCapture(e.pointerId); h.dataset.drag = '1'; e.preventDefault(); });
+      h.addEventListener('pointermove', (e) => {
+        if (h.dataset.drag !== '1') return;
+        const p = svgPoint(svg, e);
+        MEAS[k] = [Math.min(W, Math.max(0, p.x)), Math.min(H, Math.max(0, p.y))];
+        h.setAttribute('cx', MEAS[k][0]); h.setAttribute('cy', MEAS[k][1]); draw();
+      });
+      const end = () => { h.dataset.drag = '0'; };
+      h.addEventListener('pointerup', end); h.addEventListener('pointercancel', end);
+      h.addEventListener('keydown', (e) => {
+        const d = e.shiftKey ? 10 : 2, m = { ArrowLeft: [-d, 0], ArrowRight: [d, 0], ArrowUp: [0, -d], ArrowDown: [0, d] }[e.key];
+        if (!m) return;
+        e.preventDefault();
+        MEAS[k] = [Math.min(W, Math.max(0, MEAS[k][0] + m[0])), Math.min(H, Math.max(0, MEAS[k][1] + m[1]))];
+        h.setAttribute('cx', MEAS[k][0]); h.setAttribute('cy', MEAS[k][1]); draw();
+      });
+      svg.append(h);
+    });
+    draw();
+    return;
+  }
+  const quad = svgEl('polygon', { class: 'cl paper-quad' });
   svg.append(quad);
   const draw = () => quad.setAttribute('points', st.corners.map((c) => c.join(',')).join(' '));
   draw();
-  const r = Math.max(W, H) * 0.012;
   const labels = ['TL', 'TR', 'BR', 'BL'];
   st.corners.forEach((c, i) => {
-    const h = svgEl('circle', { class: 'corner-handle', r, cx: c[0], cy: c[1], tabindex: 0, 'aria-label': `Esquina ${labels[i]}`, role: 'slider' });
+    const h = svgEl('circle', { class: 'cl corner-handle', r, cx: c[0], cy: c[1], tabindex: 0, 'aria-label': `Esquina ${labels[i]}`, role: 'slider' });
     h.addEventListener('pointerdown', (e) => { h.setPointerCapture(e.pointerId); h.dataset.drag = '1'; e.preventDefault(); });
     h.addEventListener('pointermove', (e) => {
       if (h.dataset.drag !== '1') return;
-      const pt = svg.createSVGPoint();
-      pt.x = e.clientX; pt.y = e.clientY;
-      const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+      const p = svgPoint(svg, e);
       const x = Math.min(W, Math.max(0, p.x)), y = Math.min(H, Math.max(0, p.y));
       st.corners[i] = [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
       h.setAttribute('cx', x); h.setAttribute('cy', y);
@@ -223,12 +270,26 @@ function renderCorners() {
     });
     svg.append(h);
   });
-  $('name').value = st.name;
-  $('corner-note').classList.toggle('hidden', st.corners_detected !== false);
-  setPaper(st.paper.name || 'A4', st.paper.width_mm, st.paper.height_mm);
 }
+$('meas-mm').addEventListener('input', () => { $('meas-preset').value = ''; measInfo(); });
+$('meas-preset').addEventListener('change', () => { if ($('meas-preset').value) { $('meas-mm').value = $('meas-preset').value; measInfo(); } });
+$('paper-preset').addEventListener('change', () => {
+  const v = $('paper-preset').value;
+  if (!v) return;
+  const [w, h] = v.split('x').map(Number);
+  setPaper('custom', w, h);
+  $('paper-preset').value = '';
+});
 
 function paperBody() {
+  if (S.paperName === 'measure') {
+    const { width: W, height: H } = S.st.source;
+    const mm = +$('meas-mm').value, px = Math.hypot(MEAS.p2[0] - MEAS.p1[0], MEAS.p2[1] - MEAS.p1[1]);
+    if (!(mm > 0) || px < 10) throw new Error('Pon dos marcadores separados y una distancia real mayor que 0');
+    const s = px / mm;
+    S.st.corners = [[0, 0], [W, 0], [W, H], [0, H]];
+    return { paper: 'custom', paper_width_mm: +(Math.max(W, H) / s).toFixed(2), paper_height_mm: +(Math.min(W, H) / s).toFixed(2) };
+  }
   const b = { paper: S.paperName };
   if (S.paperName === 'custom') { b.paper_width_mm = S.pw; b.paper_height_mm = S.ph; }
   return b;
@@ -236,7 +297,9 @@ function paperBody() {
 
 async function trace(extra = {}) {
   const st = S.st;
-  const body = { corners: st.corners, ...paperBody(), ...extra };
+  let pb;
+  try { pb = paperBody(); } catch (e) { toast(e.message, true); return false; }
+  const body = { corners: st.corners, ...pb, ...extra };
   const c = await busy('Trazando la silueta…', () => api(`/api/sessions/${st.id}/trace`, { method: 'POST', headers: JSON_HDR, body: JSON.stringify(body) }));
   if (!c) return false;
   st.contours = c;
@@ -545,7 +608,7 @@ function renderTabs() {
   plus.className = 'tab-plus'; plus.textContent = '+'; plus.title = 'Añadir un objeto detectado o importar de otro proyecto'; plus.setAttribute('aria-label', 'Añadir forma');
   plus.addEventListener('click', (e) => {
     e.stopPropagation();
-    openMenu(plus, [...S.st.contours.components.map((c) => ({ label: `Objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => addShape(c.id) })), '-', { label: 'Importar de otro proyecto…', fn: openImport }]);
+    openMenu(plus, [...S.st.contours.components.map((c) => ({ label: `Objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => addShape(c.id) })), '-', { label: 'Forma manual (medidas / dibujo)…', fn: openManual }, { label: 'Importar SVG o DXF…', fn: openVector }, { label: 'Importar de otro proyecto…', fn: openImport }]);
   });
   box.append(plus);
 }
@@ -609,11 +672,11 @@ function addShape(comp, from) {
 /* ---- importar formas de otros proyectos (el contorno se copia: la forma queda independiente) */
 function importShapes(items) {
   let last = null;
-  for (const { c, name: srcName } of items) {
+  for (const { c, name: srcName, label, withHoles } of items) {
     const xs = c.outer.map((p) => p[0]), ys = c.outer.map((p) => p[1]);
     const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
     const f = (ring) => ring.map((p) => [r2(p[0] - cx), r2(p[1] - cy)]);
-    const sh = { id: newId(), name: `${srcName}·P${c.id + 1}`, comp: null, outer: f(c.outer), holes: [],
+    const sh = { id: newId(), name: label || `${srcName}·P${c.id + 1}`, comp: null, outer: f(c.outer), holes: withHoles ? (c.holes || []).map(f) : [],
       mirror: false, offset_mm: 0, depth_mm: null, keep_holes: false, rot: 0, notch: { on: false, d: 16, u: 0, v: 0 } };
     [sh.notch.u, sh.notch.v] = defaultNotchUV(c.bbox.width, c.bbox.height);
     placeShape(sh);
@@ -681,6 +744,167 @@ async function openImport() {
     importShapes(items);
     toast(`${items.length} forma${items.length === 1 ? '' : 's'} importada${items.length === 1 ? '' : 's'}`);
   });
+}
+
+/* ---- modal generico + formas manuales + SVG/DXF */
+function modalShell(title, goLabel, wide = false) {
+  const ov = document.createElement('div');
+  ov.className = 'modal-ov';
+  ov.innerHTML = `<div class="modal${wide ? ' wide' : ''}" role="dialog" aria-modal="true" aria-label="${title}"><div class="modal-h"><b>${title}</b><span class="grow"></span><button class="link" data-x>Cerrar</button></div><div class="modal-b" data-body></div><div class="modal-f"><span class="muted" data-info></span><span class="grow"></span><button class="btn primary" data-go disabled>${goLabel}</button></div></div>`;
+  document.body.append(ov);
+  const keyh = (e) => { if (e.key === 'Escape') close(); };
+  const close = () => { ov.remove(); document.removeEventListener('keydown', keyh); };
+  document.addEventListener('keydown', keyh);
+  ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
+  ov.querySelector('[data-x]').addEventListener('click', close);
+  return { ov, close, body: ov.querySelector('[data-body]'), info: ov.querySelector('[data-info]'), go: ov.querySelector('[data-go]') };
+}
+const bboxFromRing = (ring) => { const xs = ring.map((p) => p[0]), ys = ring.map((p) => p[1]); const x = Math.min(...xs), y = Math.min(...ys); return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y }; };
+const arcPts = (cx, cy, r, a0, a1, n) => Array.from({ length: n + 1 }, (_, i) => { const a = ((a0 + ((a1 - a0) * i) / n) * Math.PI) / 180; return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; });
+function primitiveRing(kind, v) {
+  const w = v.w, h = v.h;
+  if (kind === 'rect') {
+    const r = Math.min(v.r || 0, w / 2 - 0.01, h / 2 - 0.01);
+    if (r <= 0.05) return [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]];
+    return [...arcPts(w / 2 - r, -h / 2 + r, r, -90, 0, 10), ...arcPts(w / 2 - r, h / 2 - r, r, 0, 90, 10), ...arcPts(-w / 2 + r, h / 2 - r, r, 90, 180, 10), ...arcPts(-w / 2 + r, -h / 2 + r, r, 180, 270, 10)];
+  }
+  if (kind === 'ellipse') return Array.from({ length: 72 }, (_, i) => { const a = (i / 72) * 2 * Math.PI; return [(w / 2) * Math.cos(a), (h / 2) * Math.sin(a)]; });
+  if (kind === 'slot') {
+    const r = Math.min(w, h) / 2;
+    if (w >= h) return [...arcPts(w / 2 - r, 0, r, -90, 90, 20), ...arcPts(-w / 2 + r, 0, r, 90, 270, 20)];
+    return [...arcPts(0, h / 2 - r, r, 0, 180, 20), ...arcPts(0, -h / 2 + r, r, 180, 360, 20)];
+  }
+  if (kind === 'poly') { const n = Math.max(3, Math.round(v.n)), R = w / 2; return Array.from({ length: n }, (_, i) => { const a = (i / n) * 2 * Math.PI - Math.PI / 2; return [R * Math.cos(a), R * Math.sin(a)]; }); }
+  return [];
+}
+function openManual() {
+  closeMenu();
+  const M = modalShell('Forma manual', 'Añadir al bin', true);
+  M.body.innerHTML = `
+    <div class="seg" id="mn-mode"><button data-m="prim" class="on">Medidas</button><button data-m="draw">Dibujar polígono</button></div>
+    <div id="mn-prim">
+      <div class="mn-row"><label>Tipo <select id="mn-kind"><option value="rect">Rectángulo (esquinas redondeables)</option><option value="ellipse">Círculo / elipse</option><option value="slot">Ranura (obround)</option><option value="poly">Polígono regular</option></select></label>
+        <label id="mn-w-l">Ancho (mm) <input type="number" id="mn-w" min="2" max="400" step="0.5" value="40"></label>
+        <label id="mn-h-l">Alto (mm) <input type="number" id="mn-h" min="2" max="400" step="0.5" value="25"></label>
+        <label id="mn-r-l">Radio de esquina (mm) <input type="number" id="mn-r" min="0" max="100" step="0.5" value="3"></label>
+        <label id="mn-n-l" class="hidden">Lados <input type="number" id="mn-n" min="3" max="24" step="1" value="6"></label></div>
+      <svg id="mn-prev" class="mn-canvas" viewBox="-60 -40 120 80" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <div id="mn-draw" class="hidden">
+      <p class="muted">Haz clic para poner vértices (cuadrícula de 1 mm; <b>Shift</b> = sin ajuste). Cierra con doble clic o con «Cerrar polígono».</p>
+      <svg id="mn-cv" class="mn-canvas draw" viewBox="0 0 200 130" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="mn-row"><button class="btn ghost" id="mn-undo" type="button">Quitar último punto</button><button class="btn ghost" id="mn-close" type="button">Cerrar polígono</button><button class="btn ghost" id="mn-clear" type="button">Borrar todo</button><span class="muted" id="mn-dim"></span></div>
+    </div>`;
+  const $m = (id) => M.body.querySelector('#' + id);
+  let mode = 'prim', pts = [], closed = false, ring = [];
+  const showFields = () => {
+    const k = $m('mn-kind').value;
+    $m('mn-h-l').classList.toggle('hidden', k === 'poly');
+    $m('mn-r-l').classList.toggle('hidden', k !== 'rect');
+    $m('mn-n-l').classList.toggle('hidden', k !== 'poly');
+    $m('mn-w-l').firstChild.textContent = k === 'poly' ? 'Diámetro (mm) ' : k === 'ellipse' ? 'Ancho / diámetro (mm) ' : 'Ancho (mm) ';
+  };
+  const upd = () => {
+    if (mode === 'prim') {
+      const v = { w: +$m('mn-w').value, h: +$m('mn-h').value, r: +$m('mn-r').value, n: +$m('mn-n').value };
+      if (v.w >= 2 && (v.h >= 2 || $m('mn-kind').value === 'poly')) ring = primitiveRing($m('mn-kind').value, v); else ring = [];
+      const pv = $m('mn-prev');
+      pv.replaceChildren();
+      for (let i = -60; i <= 60; i += 10) pv.append(svgEl('line', { x1: i, y1: -40, x2: i, y2: 40, class: 'bin-grid' }));
+      for (let j = -40; j <= 40; j += 10) pv.append(svgEl('line', { x1: -60, y1: j, x2: 60, y2: j, class: 'bin-grid' }));
+      if (ring.length) {
+        const b = bboxFromRing(ring), f = Math.min(1, 100 / Math.max(b.width, b.height, 1));
+        const g = svgEl('g', { transform: `scale(${f})` });
+        g.append(svgEl('path', { d: pathD(ring), class: 'shp-body', fill: '#f5d9c8', stroke: '#e0561a', 'stroke-width': 1.2 / f }));
+        pv.append(g);
+        M.info.textContent = `${b.width.toFixed(1)} × ${b.height.toFixed(1)} mm${f < 1 ? ' (vista reducida)' : ''}`;
+      } else M.info.textContent = 'Medidas no válidas';
+    } else {
+      const cv = $m('mn-cv');
+      cv.replaceChildren();
+      for (let i = 0; i <= 200; i += 10) cv.append(svgEl('line', { x1: i, y1: 0, x2: i, y2: 130, class: 'bin-grid' }));
+      for (let j = 0; j <= 130; j += 10) cv.append(svgEl('line', { x1: 0, y1: j, x2: 200, y2: j, class: 'bin-grid' }));
+      if (pts.length) {
+        cv.append(svgEl(closed ? 'polygon' : 'polyline', { points: pts.map((p) => p.join(',')).join(' '), fill: closed ? '#f5d9c8' : 'none', stroke: '#e0561a', 'stroke-width': 0.8 }));
+        pts.forEach((p) => cv.append(svgEl('circle', { cx: p[0], cy: p[1], r: 1.4, fill: '#e0561a' })));
+      }
+      ring = closed && pts.length >= 3 ? pts.map((p) => [p[0], p[1]]) : [];
+      if (ring.length) { const b = bboxFromRing(ring); $m('mn-dim').textContent = `${b.width.toFixed(0)} × ${b.height.toFixed(0)} mm`; } else $m('mn-dim').textContent = `${pts.length} punto${pts.length === 1 ? '' : 's'}`;
+      M.info.textContent = ring.length ? $m('mn-dim').textContent : 'Dibuja y cierra el polígono';
+    }
+    M.go.disabled = ring.length < 3;
+  };
+  M.body.querySelectorAll('#mn-prim input, #mn-prim select').forEach((el) => el.addEventListener('input', () => { showFields(); upd(); }));
+  M.body.querySelectorAll('#mn-mode button').forEach((b) => b.addEventListener('click', () => {
+    mode = b.dataset.m;
+    M.body.querySelectorAll('#mn-mode button').forEach((x) => x.classList.toggle('on', x === b));
+    $m('mn-prim').classList.toggle('hidden', mode !== 'prim'); $m('mn-draw').classList.toggle('hidden', mode !== 'draw');
+    upd();
+  }));
+  const cv = $m('mn-cv');
+  cv.addEventListener('click', (e) => {
+    if (closed) return;
+    const p = svgPoint(cv, e);
+    let x = Math.min(200, Math.max(0, p.x)), y = Math.min(130, Math.max(0, p.y));
+    if (!e.shiftKey) { x = Math.round(x); y = Math.round(y); }
+    if (e.detail >= 2 && pts.length >= 3) { closed = true; } else if (!pts.length || pts[pts.length - 1][0] !== x || pts[pts.length - 1][1] !== y) pts.push([x, y]);
+    upd();
+  });
+  $m('mn-undo').addEventListener('click', () => { if (closed) closed = false; else pts.pop(); upd(); });
+  $m('mn-close').addEventListener('click', () => { if (pts.length >= 3) { closed = true; upd(); } });
+  $m('mn-clear').addEventListener('click', () => { pts = []; closed = false; upd(); });
+  M.go.addEventListener('click', () => {
+    if (ring.length < 3) return;
+    const r = ring.map((p) => [r2(p[0]), r2(p[1])]), b = bboxFromRing(r);
+    const kindName = mode === 'draw' ? 'Dibujo' : { rect: 'Rect', ellipse: 'Elipse', slot: 'Ranura', poly: 'Polígono' }[$m('mn-kind').value];
+    M.close();
+    importShapes([{ c: { id: 0, outer: r, holes: [], bbox: b }, name: 'Manual', label: `${kindName} ${b.width.toFixed(0)}×${b.height.toFixed(0)}` }]);
+    toast('Forma añadida');
+  });
+  showFields(); upd();
+}
+async function openVector() {
+  closeMenu();
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.svg,.dxf,image/svg+xml';
+  inp.addEventListener('change', async () => {
+    const f = inp.files[0];
+    if (!f) return;
+    const fd = new FormData(); fd.append('file', f);
+    const res = await busy('Leyendo el archivo…', () => api('/api/vector/parse', { method: 'POST', body: fd }));
+    if (!res) return;
+    if (!res.shapes.length) return toast('No encontré contornos cerrados', true);
+    const M = modalShell(`Importar ${res.format.toUpperCase()} · ${f.name}`, 'Importar', true);
+    M.body.innerHTML = `<p class="muted">Elige los contornos (medidas en mm según las unidades del archivo). Los huecos internos se conservan; actívalos por forma con «Detectar huecos» en su panel Pocket si los necesitas.</p>
+      <label class="inline">Escala (%) <input type="number" id="vc-scale" min="1" max="2000" step="1" value="100"></label><div class="imp-grid" id="vc-grid"></div>`;
+    const grid = M.body.querySelector('#vc-grid'), sc = M.body.querySelector('#vc-scale'), pick = new Set();
+    const upd = () => { M.info.textContent = `${pick.size} seleccionada${pick.size === 1 ? '' : 's'}`; M.go.disabled = !pick.size; };
+    const capOf = (c) => { const k = (+sc.value || 100) / 100; return `${(c.bbox.width * k).toFixed(1)} × ${(c.bbox.height * k).toFixed(1)} mm`; };
+    const caps = [];
+    for (const c of res.shapes) {
+      const card = document.createElement('button');
+      card.className = 'imp-card on'; card.type = 'button';
+      const cap = document.createElement('span'); cap.textContent = capOf(c); caps.push([cap, c]);
+      card.append(thumbSvg(c), cap);
+      pick.add(c.id);
+      card.addEventListener('click', () => { if (pick.has(c.id)) { pick.delete(c.id); card.classList.remove('on'); } else { pick.add(c.id); card.classList.add('on'); } upd(); });
+      grid.append(card);
+    }
+    sc.addEventListener('input', () => caps.forEach(([el, c]) => { el.textContent = capOf(c); }));
+    upd();
+    M.go.addEventListener('click', () => {
+      const k = Math.min(20, Math.max(0.01, (+sc.value || 100) / 100));
+      const sel = res.shapes.filter((c) => pick.has(c.id)).map((c) => {
+        const g = (ring) => ring.map((p) => [p[0] * k, p[1] * k]);
+        const cc = { id: c.id, outer: g(c.outer), holes: c.holes.map(g), bbox: { x: c.bbox.x * k, y: c.bbox.y * k, width: c.bbox.width * k, height: c.bbox.height * k } };
+        return { c: cc, name: f.name.replace(/\.[^.]+$/, ''), label: `${f.name.replace(/\.[^.]+$/, '')}·${c.id + 1}`, withHoles: true };
+      });
+      M.close();
+      importShapes(sel);
+      toast(`${sel.length} forma${sel.length === 1 ? '' : 's'} importada${sel.length === 1 ? '' : 's'}`);
+    });
+  });
+  inp.click();
 }
 function deleteShape(id) {
   if (SHAPES().length <= 1) return toast('El bin necesita al menos una forma', true);

@@ -27,6 +27,7 @@ import io
 import threading
 import zipfile
 
+from geometry.vector import VectorError, parse_vector
 from geometry.design import DEFAULT_SETTINGS, FINGER_D, arrange, build_design, comp_of, default_notch, local_polygon
 from geometry.gridfinity import export_stl, pockets_to_svg
 from vision import pipeline as P
@@ -88,6 +89,8 @@ def paper_size(name: str, w: Optional[float], h: Optional[float]):
     if name.upper() in P.PAPERS:
         return P.PAPERS[name.upper()]
     if name.lower() == "custom" and w and h and 50 <= w <= 2000 and 50 <= h <= 2000:
+        if w * h > 450_000:
+            raise HTTPException(422, "el area de referencia es demasiado grande (max. ~900 x 500 mm): acerca la camara o usa una referencia mas cercana")
         return (float(w), float(h))
     raise HTTPException(422, "papel no valido (A4, LETTER o custom con ancho/alto en mm)")
 
@@ -490,6 +493,24 @@ def bin_svg(sid: str):
     if not (d / "bin.svg").exists():
         raise HTTPException(404, "aun no hay bin")
     return FileResponse(d / "bin.svg", media_type="image/svg+xml", filename=f"{_safe_name(read_state(d))}_shape.svg")
+
+
+@app.post("/api/vector/parse")
+async def vector_parse(file: UploadFile = File(...)):
+    """SVG / DXF -> contornos en mm (sin guardar nada). El cliente elige cuales importar."""
+    raw = await file.read()
+    if len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(413, "archivo demasiado grande (max. 8 MB)")
+    try:
+        shapes, fmt = parse_vector(file.filename or "", raw)
+    except VectorError as e:
+        raise HTTPException(422, str(e))
+    out = []
+    for i, sh in enumerate(shapes):
+        xs, ys = [p[0] for p in sh["outer"]], [p[1] for p in sh["outer"]]
+        out.append({"id": i, "outer": sh["outer"], "holes": sh["holes"],
+                    "bbox": {"x": min(xs), "y": min(ys), "width": round(max(xs) - min(xs), 3), "height": round(max(ys) - min(ys), 3)}})
+    return {"format": fmt, "shapes": out}
 
 
 @app.get("/api/health")

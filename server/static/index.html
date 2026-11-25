@@ -62,6 +62,34 @@
           <button data-paper="A4" role="radio">A4</button>
           <button data-paper="LETTER" role="radio">US Letter</button>
           <button data-paper="custom" role="radio">Custom</button>
+          <button data-paper="measure" role="radio" title="Escala a partir de un objeto de medida conocida">Medir</button>
+        </div>
+        <label id="preset-box">Medidas predefinidas
+          <select id="paper-preset">
+            <option value="">— elegir —</option>
+            <option value="210x148">A5 · 210 × 148</option>
+            <option value="420x297">A3 · 420 × 297</option>
+            <option value="355.6x215.9">Legal · 355.6 × 215.9</option>
+            <option value="431.8x279.4">Tabloid · 431.8 × 279.4</option>
+            <option value="300x200">Placa 300 × 200</option>
+          </select>
+        </label>
+        <div id="measure-box" class="hidden">
+          <p class="note">Arrastra los dos marcadores hasta los extremos de algo cuya medida conozcas (tarjeta, moneda, regla) y escribe la distancia real. Supone la foto tomada de frente: el papel/tarjeta no hace falta.</p>
+          <label>Referencia
+            <select id="meas-preset">
+              <option value="">— medida libre —</option>
+              <option value="85.6">Tarjeta de crédito · lado largo 85.6</option>
+              <option value="53.98">Tarjeta de crédito · lado corto 53.98</option>
+              <option value="23.25">Moneda 1 € · 23.25</option>
+              <option value="24.26">Moneda 25 ¢ (EE. UU.) · 24.26</option>
+              <option value="297">Hoja A4 · lado largo 297</option>
+              <option value="210">Hoja A4 · lado corto 210</option>
+              <option value="100">Regla · 100 mm</option>
+            </select>
+          </label>
+          <label>Distancia real (mm) <input type="number" id="meas-mm" min="1" max="2000" step="0.01" value="85.6"></label>
+          <p class="muted" id="meas-info"></p>
         </div>
         <div class="row">
           <label>Ancho (mm) <input type="number" id="pw" min="50" max="2000" step="0.1"></label>
