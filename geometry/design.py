@@ -170,7 +170,14 @@ def _hollow_parts(nw, nd, u, H, zone, pk_all, S, c_chamfer):
     wall = S["wall_thickness_mm"]
     lid_t = S["lid_thickness_mm"]
     rim = max(0.8, rib - S["lid_ledge_mm"])                       # reborde alto junto al bolsillo; el resto de la costilla es la grada de la tapa
-    l_out = max(0.0, min(S["lid_ledge_mm"], wall - 0.8))          # escalon sobre la pared exterior
+    # el rebaje de la tapa termina justo donde empieza la base del labio (sin voladizo bajo el anillo); la cavidad
+    # queda `lid_ledge_mm` mas adentro: esa es la grada de la pared exterior
+    r_in = 2.65 if S["stacking_lip"] else wall   # 0.05 mm dentro del labio: evita aristas coincidentes con el anillo
+    l_out = max(0.0, S["lid_ledge_mm"])
+    def _zone(inset):
+        return Polygon(rounded_rect(nw * u - BIN_GAP - 2 * inset, nd * u - BIN_GAP - 2 * inset, max(CORNER_R - inset, 0.5))).buffer(0)
+    zone_ext = _zone(r_in)
+    zone = _zone(r_in + l_out)
     z_body = FOOT_H + bf                                          # suelo de la cavidad del cuerpo
     A = zone.difference(pk_all.buffer(rib, 12))
     A = A.buffer(-0.5, 4).buffer(0.5, 4).simplify(0.03)           # quita rendijas < 1 mm (mallas degeneradas)
@@ -206,7 +213,6 @@ def _hollow_parts(nw, nd, u, H, zone, pk_all, S, c_chamfer):
         cup = cup - Manifold.batch_boolean(bosses, 0)
     parts.append(cup)
     # rebaje de la tapa (toda la zona util + escalon sobre la pared exterior)
-    zone_ext = zone.buffer(l_out, 12) if l_out > 0 else zone
     seat = zone_ext.difference(pk_all.buffer(rim, 12)).buffer(-0.05, 4).buffer(0.05, 4).simplify(0.03)
     parts.append(extrude_poly(seat, H - lid_t, H + 1.0))
     return [p for p in parts if p is not None], zone_ext, lid_t, l_out, rim

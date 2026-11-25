@@ -130,9 +130,11 @@ def test_hollow_lid_and_imported_shapes():
     des["shapes"].append({"id": "imp1", "name": "Importada", "comp": None, "outer": ring, "holes": [], "x": 0, "y": 0, "rot": 0,
                           "notch": {"on": False, "d": 16, "u": 0, "v": 0}})
     des["settings"]["auto_size"] = True
+    for sh, a in zip(des["shapes"], c.post(f"/api/sessions/{sid}/design/arrange", json=des).json()):   # sin solapes
+        sh.update(x=a["x"], y=a["y"], rot=a["rot"])
     r = c.put(f"/api/sessions/{sid}/design", json=des)
     assert r.status_code == 200, r.text
-    assert r.json()["mesh"]["watertight"] and not r.json()["has_lid"]
+    assert r.json()["mesh"]["watertight"] and not r.json()["has_lid"] and r.json()["problems"] == {}
     # forma sin contorno ni comp: error claro
     bad = {**des, "shapes": [{"id": "x", "name": "x", "comp": None, "x": 0, "y": 0}]}
     assert c.put(f"/api/sessions/{sid}/design", json=bad).status_code == 422
