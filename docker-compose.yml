@@ -1,0 +1,33 @@
+# Gridfinity Twin: app + Caddy (HTTPS automatico si DOMAIN es un dominio apuntando a este VPS)
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      TWIN_PASSWORD: ${TWIN_PASSWORD:?define TWIN_PASSWORD en .env}
+      TWIN_USER: ${TWIN_USER:-admin}
+    volumes:
+      - twin-data:/data
+    expose:
+      - "8000"
+    mem_limit: 1g
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      DOMAIN: ${DOMAIN:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  twin-data:
+  caddy-data:
+  caddy-config:

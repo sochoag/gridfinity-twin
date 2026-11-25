@@ -1,0 +1,21 @@
+# Para el VPS de Hostinger que ya tiene Traefik (puertos 80/443 ocupados): sin Caddy.
+services:
+  twin:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000"
+    environment:
+      TWIN_PASSWORD: ${TWIN_PASSWORD:?define TWIN_PASSWORD en .env}
+      TWIN_USER: ${TWIN_USER:-davo}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}.rule=Host(`${COMPOSE_PROJECT_NAME}.${TRAEFIK_HOST}`)
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}.entrypoints=websecure
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}.tls.certresolver=letsencrypt
+      - traefik.http.services.${COMPOSE_PROJECT_NAME}.loadbalancer.server.port=8000
+    volumes:
+      - twin-data:/data
+    mem_limit: 1g
+volumes:
+  twin-data:

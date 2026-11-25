@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gridfinity Twin · de foto a bin</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%23d4510a%27/%3E%3Cpath d=%27M7 7h8v8H7zM17 7h8v8h-8zM7 17h8v8H7zM17 17h8v8h-8z%27 fill=%27none%27 stroke=%27white%27 stroke-width=%271.8%27/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">{"imports": {"three": "/vendor/three/three.module.js"}}</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#" id="brand"><span class="logo">▦</span> Gridfinity Twin</a>
+  <nav class="steps" id="steps" aria-label="Pasos">
+    <button data-step="home" class="step">1 · Foto</button>
+    <button data-step="corners" class="step" disabled>2 · Papel</button>
+    <button data-step="shape" class="step" disabled>3 · Silueta</button>
+    <button data-step="bin" class="step" disabled>4 · Bin</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ========== INICIO: subir foto + mis assets ========== -->
+  <section id="view-home" class="view">
+    <h1>De foto a bin Gridfinity</h1>
+    <p class="lead">Pon la herramienta sobre una hoja de papel, toma la foto desde arriba y sube la imagen. Una sola herramienta por foto da el mejor resultado.</p>
+    <label class="drop" id="drop" tabindex="0">
+      <input type="file" id="file" accept="image/jpeg,image/png,image/heic,.jpg,.jpeg,.png,.heic" hidden>
+      <span class="drop-icon">⬆</span>
+      <strong>Suelta la imagen aquí o haz clic para elegirla</strong>
+      <small>JPG o PNG · máximo 15 MB</small>
+    </label>
+    <div class="row">
+      <label>Tamaño de papel
+        <select id="home-paper">
+          <option value="A4">A4 (297 × 210 mm)</option>
+          <option value="LETTER">US Letter (279.4 × 215.9 mm)</option>
+          <option value="custom">Personalizado…</option>
+        </select>
+      </label>
+      <span id="home-custom" class="row hidden">
+        <label>Ancho (mm) <input type="number" id="home-pw" value="297" min="50" max="2000" step="0.1"></label>
+        <label>Alto (mm) <input type="number" id="home-ph" value="210" min="50" max="2000" step="0.1"></label>
+      </span>
+    </div>
+
+    <h2>Mis assets</h2>
+    <div id="assets" class="assets"><p class="muted">Aún no hay nada guardado.</p></div>
+  </section>
+
+  <!-- ========== ESQUINAS DEL PAPEL ========== -->
+  <section id="view-corners" class="view hidden">
+    <div class="layout">
+      <div class="stage">
+        <svg id="corner-svg" class="canvas" preserveAspectRatio="xMidYMid meet"></svg>
+        <p class="hint">Arrastra las cuatro esquinas hasta que coincidan con las esquinas de la hoja.</p>
+      </div>
+      <aside class="panel">
+        <h2>Paper settings</h2>
+        <label>Nombre <input type="text" id="name" maxlength="80"></label>
+        <div class="seg" id="paper-seg" role="radiogroup" aria-label="Papel">
+          <button data-paper="A4" role="radio">A4</button>
+          <button data-paper="LETTER" role="radio">US Letter</button>
+          <button data-paper="custom" role="radio">Custom</button>
+        </div>
+        <div class="row">
+          <label>Ancho (mm) <input type="number" id="pw" min="50" max="2000" step="0.1"></label>
+          <label>Alto (mm) <input type="number" id="ph" min="50" max="2000" step="0.1"></label>
+        </div>
+        <p id="corner-note" class="note hidden">No pude detectar la hoja automáticamente. Ajusta las esquinas a mano.</p>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="btn-other">Elegir otra foto</button>
+        <button class="btn primary" id="btn-trace">Trazar silueta</button>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ========== SILUETA ========== -->
+  <section id="view-shape" class="view hidden">
+    <div class="layout">
+      <div class="stage">
+        <svg id="shape-svg" class="canvas" preserveAspectRatio="xMidYMid meet"></svg>
+        <p class="hint">Haz clic en un objeto para incluirlo o excluirlo del bin.</p>
+      </div>
+      <aside class="panel">
+        <h2>Shape settings</h2>
+        <label>Simplificación del contorno: <output id="simp-out">0.35</output> mm
+          <input type="range" id="simp" min="0.1" max="1.5" step="0.05" value="0.35">
+        </label>
+        <label class="check"><input type="checkbox" id="keep-holes-trace" checked> Detectar huecos internos</label>
+        <h3>Objetos detectados</h3>
+        <ul id="comp-list" class="comp-list"></ul>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="btn-retrace">Volver a trazar</button>
+        <button class="btn ghost" id="btn-back-paper">Volver al papel</button>
+        <button class="btn primary" id="btn-to-bin">Crear bin</button>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ========== BIN ========== -->
+  <section id="view-bin" class="view hidden">
+    <div class="layout">
+      <div class="stage">
+        <div id="viewer" class="viewer" aria-label="Vista previa 3D del bin"></div>
+        <div id="bin-info" class="info"></div>
+        <ul id="bin-warn" class="warn"></ul>
+      </div>
+      <aside class="panel scroll">
+        <h2>Bin settings</h2>
+        <fieldset>
+          <legend>Tamaño</legend>
+          <label class="check"><input type="checkbox" id="b-auto" checked> Tamaño automático</label>
+          <div class="row">
+            <label>Ancho (celdas) <input type="number" id="b-gw" min="1" max="12" value="3" disabled></label>
+            <label>Fondo (celdas) <input type="number" id="b-gd" min="1" max="12" value="3" disabled></label>
+          </div>
+          <label>Altura (unidades de 7 mm) <input type="number" id="b-hu" min="1" max="12" value="4"></label>
+          <label>Paso de rejilla (mm) <input type="number" id="b-unit" min="20" max="80" step="0.1" value="42"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Cutout</legend>
+          <label>Holgura (mm) <input type="number" id="b-clr" min="0" max="5" step="0.1" value="1"></label>
+          <label>Profundidad (mm) <input type="number" id="b-depth" min="1" max="80" step="0.5" value="12"></label>
+          <label>Muescas para el dedo
+            <select id="b-finger">
+              <option value="none">Sin muescas</option>
+              <option value="one_end">Un extremo</option>
+              <option value="both_ends">Ambos extremos</option>
+            </select>
+          </label>
+          <label>Diámetro de la muesca (mm) <input type="number" id="b-fd" min="8" max="30" step="1" value="16"></label>
+          <label class="check"><input type="checkbox" id="b-holes"> Conservar huecos internos</label>
+        </fieldset>
+        <fieldset>
+          <legend>Extras</legend>
+          <label class="check"><input type="checkbox" id="b-lip" checked> Stacking lip</label>
+          <label class="check"><input type="checkbox" id="b-mag"> Agujeros para imanes</label>
+          <div class="row">
+            <label>Ø imán (mm) <input type="number" id="b-md" min="4" max="8.2" step="0.1" value="6.5"></label>
+            <label>Prof. (mm) <input type="number" id="b-mdep" min="1" max="4" step="0.1" value="2.4"></label>
+          </div>
+        </fieldset>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="btn-back-shape">Volver a la silueta</button>
+        <button class="btn primary" id="btn-build">Generar bin</button>
+        <div class="row dl">
+          <a class="btn ghost" id="dl-stl" href="#" download>Descargar STL</a>
+          <a class="btn ghost" id="dl-svg" href="#" download>Descargar SVG</a>
+        </div>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<div id="busy" class="busy hidden" role="status" aria-live="polite"><div class="spinner"></div><span id="busy-text">Procesando…</span></div>
+<div id="toast" class="toast hidden" role="alert"></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
