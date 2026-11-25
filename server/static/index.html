@@ -44,7 +44,7 @@
       </span>
     </div>
 
-    <h2>Mis assets</h2>
+    <div class="h2row"><h2>Mis assets</h2><button class="btn small" id="btn-merge" title="Crea un proyecto nuevo con las siluetas de varios proyectos ya trazados">⊕ Fusionar proyectos…</button></div>
     <div id="assets" class="assets"><p class="muted">Aún no hay nada guardado.</p></div>
   </section>
 
@@ -144,9 +144,12 @@
       <input id="ed-name" class="ed-title" maxlength="80" aria-label="Nombre del bin">
       <span id="ed-saved" class="muted">Guardado</span>
       <span class="grow"></span>
+      <span id="dl-all-wrap" class="dl-all hidden">Todos los bins: <a class="link" id="dl-all-zip" href="#" download>.zip</a> · <a class="link" id="dl-all-3mf" href="#" download>.3mf</a></span>
+      <a class="btn" id="dl-3mf" href="#" download title="Un solo archivo con bin, inserto, tapa y divisores (cada pieza de un color)">⬇ 3MF</a>
       <a class="btn primary" id="dl-zip" href="#" download>⬇ Download STLs (.zip)</a>
     </div>
 
+    <div class="ed-tabs card bin-tabs" id="bin-tabs" aria-label="Bins del proyecto"></div>
     <div class="ed-tabs card" id="ed-tabs"></div>
 
     <div class="ed-grid">
@@ -232,6 +235,19 @@
           <label>Ø magnet (mm)<input type="number" id="s-md" min="4" max="8.2" step="0.1"></label>
           <label>Depth (mm)<input type="number" id="s-mdep" min="1" max="4" step="0.1"></label>
         </div>
+        <h3 class="sec">Loose dividers</h3>
+        <p class="muted">Láminas sueltas que se insertan desde arriba en ranuras del bin (se imprimen tumbadas, en un STL aparte). No disponible con Hollow.</p>
+        <div class="duo">
+          <label>Vertical ‖ (count)<input type="number" id="s-dxn" min="0" max="10" step="1"></label>
+          <label>Horizontal ═ (count)<input type="number" id="s-dyn" min="0" max="10" step="1"></label>
+        </div>
+        <label>X positions (mm)<input type="text" id="s-dxs" placeholder="p. ej. -20, 20" autocomplete="off"></label>
+        <label>Y positions (mm)<input type="text" id="s-dys" placeholder="p. ej. 0" autocomplete="off"></label>
+        <div class="duo">
+          <label>Blade (mm)<input type="number" id="s-dth" min="0.6" max="4" step="0.1"></label>
+          <label>Slot clearance (mm)<input type="number" id="s-dcl" min="0" max="0.6" step="0.05"></label>
+        </div>
+        <label>Slot depth into wall (mm)<input type="number" id="s-dsd" min="0" max="3" step="0.1"></label>
         <h3 class="sec">Printer</h3>
         <div class="duo">
           <label>Bed X (mm)<input type="number" id="s-bedx" min="50" max="1000" step="1"></label>

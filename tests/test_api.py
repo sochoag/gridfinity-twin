@@ -1,6 +1,8 @@
+import io
 import os
 import sys
 import tempfile
+import zipfile
 
 import numpy as np
 import trimesh
@@ -315,3 +317,115 @@ def test_manual_mask_edit():
     assert c.post(f"/api/sessions/{sid}/mask", json={"edits": [{"op": "erase", "kind": "lasso", "pts": whole}]}).status_code == 422
     c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"})
     assert c.get(f"/api/sessions/{sid}").json()["mask_edits"] == []
+
+
+# ------------------------------------------------------------------ v1.3
+def _traced():
+    st = _session()
+    r = c.post(f"/api/sessions/{st['id']}/trace", json={"corners": st["corners"], "paper": "A4"})
+    assert r.status_code == 200, r.text
+    return st["id"], r.json()
+
+
+def test_loose_dividers():
+    sid, _ = _traced()
+    des = c.post(f"/api/sessions/{sid}/design/init", json={"components": [0]}).json()
+    des["settings"].update(auto_size=False, grid_width=4, grid_depth=3, dividers_x=[-30, 30], dividers_y=[0], height_units=4)
+    des["shapes"][0].update(x=0, y=-25)
+    r = c.put(f"/api/sessions/{sid}/design", json=des)
+    assert r.status_code == 200, r.text
+    meta = r.json()
+    assert meta["has_dividers"] and meta["dividers"]["watertight"] and meta["mesh"]["watertight"]
+    assert any(k["code"] == "dividers" for k in meta["checks"])
+    div = trimesh.load(io.BytesIO(c.get(f"/api/sessions/{sid}/dividers.stl").content), file_type="stl")
+    assert div.is_watertight and abs(div.bounds[1][2] - div.bounds[0][2] - 1.2) < 0.01   # tumbadas: z = grosor
+    # las ranuras existen: el bin pierde volumen respecto a uno sin divisores
+    v_with = meta["mesh"]["volume_cm3"]
+    des["settings"].update(dividers_x=[], dividers_y=[])
+    meta2 = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert not meta2["has_dividers"] and meta2["mesh"]["volume_cm3"] > v_with
+    assert c.get(f"/api/sessions/{sid}/dividers.stl").status_code == 404
+    # modo hueco: se ignoran con aviso
+    des["settings"].update(dividers_x=[0], hollow=True)
+    m3 = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert not m3["has_dividers"] and any("divisores" in w for w in m3["warnings"])
+
+
+def test_multi_bin_and_3mf():
+    import re
+    sid, cont = _traced()
+    c.post(f"/api/sessions/{sid}/design/init", json={"components": [0]})
+    d1 = c.get(f"/api/sessions/{sid}/design").json()
+    assert c.put(f"/api/sessions/{sid}/design", json=d1).status_code == 200
+    r = c.post(f"/api/sessions/{sid}/bins", json={"name": "Segundo"})
+    assert r.status_code == 200 and r.json()["id"] == "b2"
+    assert c.get(f"/api/sessions/{sid}/design?bin=b2").json() is None
+    d2 = c.post(f"/api/sessions/{sid}/design/init?bin=b2", json={"components": [1, 2]}).json()
+    assert len(d2["shapes"]) == 2 and len(c.get(f"/api/sessions/{sid}/design").json()["shapes"]) == 1   # b1 intacto
+    m2 = c.put(f"/api/sessions/{sid}/design?bin=b2", json=d2).json()
+    assert m2["mesh"]["watertight"]
+    b1 = c.get(f"/api/sessions/{sid}/bin.stl").content
+    b2 = c.get(f"/api/sessions/{sid}/bin.stl?bin=b2").content
+    assert b1 != b2 and "Segundo" in c.get(f"/api/sessions/{sid}/bin.stl?bin=b2").headers["content-disposition"]
+    assert [b["id"] for b in c.get(f"/api/sessions/{sid}/bins").json()] == ["b1", "b2"]
+    # copiar un bin
+    r3 = c.post(f"/api/sessions/{sid}/bins", json={"copy_from": "b2"}).json()
+    assert len(r3["design"]["shapes"]) == 2
+    assert c.patch(f"/api/sessions/{sid}/bins/b1", json={"name": "Principal"}).status_code == 200
+    # zip de todos
+    z = zipfile.ZipFile(io.BytesIO(c.get(f"/api/sessions/{sid}/bin.zip?all=1").content))
+    assert len([n for n in z.namelist() if n.endswith("_bin.stl")]) == 2 and any("Principal" not in n for n in z.namelist())
+    # 3MF valido, un objeto por pieza, con colores
+    r = c.get(f"/api/sessions/{sid}/bin.3mf?bin=b2")
+    assert r.status_code == 200
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    model = zf.read("3D/3dmodel.model").decode()
+    assert model.count("<object ") == 2 and "displaycolor" in model and 'unit="millimeter"' in model   # bin + inserto
+    allm = zipfile.ZipFile(io.BytesIO(c.get(f"/api/sessions/{sid}/bin.3mf?all=1").content)).read("3D/3dmodel.model").decode()
+    assert allm.count("<object ") >= 3
+    loaded = trimesh.load(io.BytesIO(r.content), file_type="3mf")
+    assert len(loaded.geometry) == 2 and all(g.is_watertight for g in loaded.geometry.values())
+    assert re.search(r'<item objectid="\d+"/>', model)
+    # b1 no se borra; b2 si
+    assert c.delete(f"/api/sessions/{sid}/bins/b1").status_code == 422
+    assert c.delete(f"/api/sessions/{sid}/bins/b2").status_code == 200
+    assert c.get(f"/api/sessions/{sid}/bin.stl?bin=b2").status_code == 404
+    assert c.get(f"/api/sessions/{sid}/bin.stl?bin=zz").status_code == 400
+    # volver a trazar descarta los bins extra
+    st = c.get(f"/api/sessions/{sid}").json()
+    c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"})
+    assert c.get(f"/api/sessions/{sid}/bins").json() == [{"id": "b1", "name": "Principal", "has_design": False, "has_bin": False}]
+
+
+def test_library_and_merge():
+    sq = [[-10, -5], [10, -5], [10, 5], [-10, 5]]
+    r = c.post("/api/library", json={"name": "Destornillador", "tags": ["Taller", " taller", "mano"], "outer": sq, "depth_mm": 14,
+                                     "notch": {"on": True, "d": 14, "u": 8, "v": 0}})
+    assert r.status_code == 200, r.text
+    it = r.json()
+    assert it["tags"] == ["taller", "mano"] and it["bbox"]["width"] == 20 and it["notch"]["on"]
+    assert c.post("/api/library", json={"name": "x", "outer": [[0, 0], [1, 0], [2, 0]]}).status_code == 422   # sin area
+    assert c.patch(f"/api/library/{it['id']}", json={"name": "Phillips", "tags": ["a"]}).json()["name"] == "Phillips"
+    assert any(i["id"] == it["id"] for i in c.get("/api/library").json())
+    assert c.delete(f"/api/library/{it['id']}").status_code == 200
+    assert c.delete(f"/api/library/{it['id']}").status_code == 404
+    # fusionar proyectos: formas de otros proyectos en uno nuevo
+    s1, c1 = _traced()
+    s2, c2 = _traced()
+    r = c.post("/api/sessions/merge", json={"ids": [s1, s2], "name": "Fusion test"})
+    assert r.status_code == 200, r.text
+    m = r.json()
+    n = len(c1["components"]) + len(c2["components"])
+    assert len(m["contours"]["components"]) == n and m["merged"] == [s1, s2]
+    comps = m["contours"]["components"]
+    assert [k["id"] for k in comps] == list(range(n))
+    from shapely.geometry import Polygon
+    polys = [Polygon(k["outer"]).buffer(0) for k in comps]
+    assert all(not polys[i].intersects(polys[j]) for i in range(n) for j in range(i + 1, n))   # no se solapan
+    # el proyecto fusionado se disena igual que uno normal
+    des = c.post(f"/api/sessions/{m['id']}/design/init", json={"components": [0, n - 1]}).json()
+    assert c.put(f"/api/sessions/{m['id']}/design", json=des).json()["mesh"]["watertight"]
+    assert c.post(f"/api/sessions/{m['id']}/trace", json={"corners": m["corners"], "paper": "A4"}).status_code == 409
+    assert c.post("/api/sessions/merge", json={"ids": [s1, s1]}).status_code == 422
+    assert c.post("/api/sessions/merge", json={"ids": [s1]}).status_code == 422
+    assert c.get("/api/sessions").json()   # el listado sigue funcionando

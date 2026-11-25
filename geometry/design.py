@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from manifold3d import Manifold
 from shapely import affinity
-from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.geometry import MultiPolygon, Point, Polygon, box as sbox
 from shapely.ops import unary_union
 
 from manifold3d import CrossSection, FillRule
@@ -33,6 +33,7 @@ DEFAULT_SETTINGS = {
     "bed_x_mm": 256.0, "bed_y_mm": 256.0, "nozzle_mm": 0.4,
     "hollow": False, "hollow_rib_mm": 2.4, "hollow_floor_mm": 1.2,
     "lid_thickness_mm": 1.2, "lid_ledge_mm": 0.8, "lid_clearance_mm": 0.2,
+    "dividers_x": [], "dividers_y": [], "divider_thickness_mm": 1.2, "divider_clearance_mm": 0.2, "divider_slot_depth_mm": 0.8,
 }
 MIN_FLOOR = 1.0
 FINGER_D = 16.0
@@ -52,6 +53,7 @@ class DesignResult:
     lid: Manifold | None = None                    # tapa (modo hueco), plana sobre z=0
     stats: dict = field(default_factory=dict)      # volumenes en cm3 (macizo / hueco / tapa)
     checks: list = field(default_factory=list)     # chequeo de imprimibilidad: {level, code, msg, shapes}
+    dividers: Manifold | None = None               # divisores sueltos (laminas planas, en fila)
 
 
 # ---------------------------------------------------------------- geometria de una forma
@@ -260,6 +262,60 @@ def _printability(items, S, W, D, H, lid_t, hollow, stats, lid, warns_n):
     return out
 
 
+def _divider_parts(S, zone, fp, floor_min, H, wall, hollow, warns):
+    """Ranuras (se restan del bin, abiertas por arriba) y laminas sueltas que encajan en ellas.
+
+    Las posiciones estan en el marco del editor (origen en el centro, Y hacia abajo). Cada ranura penetra
+    `divider_slot_depth_mm` en la pared (siempre dejando >= 0.8 mm de pared) y baja hasta justo encima del suelo."""
+    dx = [float(v) for v in (S.get("dividers_x") or [])]
+    dy = [float(v) for v in (S.get("dividers_y") or [])]
+    if not dx and not dy:
+        return [], []
+    if hollow:
+        warns.append("los divisores sueltos no estan disponibles en modo hueco: se ignoraron")
+        return [], []
+    t, cl = float(S["divider_thickness_mm"]), float(S["divider_clearance_mm"])
+    sd = max(0.0, min(float(S["divider_slot_depth_mm"]), wall - 0.8))
+    sw = t + 2 * cl
+    reach = zone.buffer(sd, 12)
+    if fp is not None:
+        reach = reach.intersection(fp.buffer(-0.8, 12))
+    slot_z = floor_min + 0.07
+    big = 5000.0
+    cuts, blades = [], []
+    bh = H - 1.0 - slot_z - 0.1                      # la lamina queda 1 mm por debajo del borde
+    if bh < 3.0:
+        warns.append("el bin es demasiado bajo para divisores sueltos")
+        return [], []
+    for axis, vals in (("x", dx), ("y", dy)):
+        for pos in vals:
+            wpos = pos if axis == "x" else -pos      # editor Y hacia abajo -> mundo Y hacia arriba
+            r = (sbox(wpos - sw / 2, -big, wpos + sw / 2, big) if axis == "x"
+                 else sbox(-big, wpos - sw / 2, big, wpos + sw / 2)).intersection(reach)
+            if r.is_empty or r.area < 1.0:
+                warns.append(f"un divisor en {axis} = {pos:.1f} mm cae fuera del bin: se ignoro")
+                continue
+            r = unary_union([g for g in (r.geoms if hasattr(r, "geoms") else [r]) if g.area > 1.0])
+            b = r.bounds
+            L = (b[3] - b[1]) if axis == "x" else (b[2] - b[0])
+            cuts.append(extrude_poly(r.simplify(0.01), slot_z, H + LIP_H + 2.0))
+            blades.append(Manifold.cube((max(L - 0.4, 2.0), bh, t)))   # 0.4 mm de holgura en los extremos
+    return cuts, blades
+
+
+def _blade_row(blades):
+    """Laminas tumbadas (grosor en Z), en fila con 4 mm de separacion, sobre z = 0."""
+    if not blades:
+        return None
+    out, y = [], 0.0
+    for bl in blades:
+        bb = bl.bounding_box()
+        w, h = bb[3] - bb[0], bb[4] - bb[1]
+        out.append(bl.translate((-bb[0] - w / 2, y - bb[1], -bb[2])))
+        y += h + 4.0
+    return Manifold.batch_boolean(out, 0) if len(out) > 1 else out[0]
+
+
 def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult:
     S = {**DEFAULT_SETTINGS, **S}
     if not shapes:
@@ -405,6 +461,7 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
         else:
             warns.append("no queda espacio para vaciar el bin (las costillas ocupan todo): reduce el grosor de costilla")
     solid = solid - Manifold.batch_boolean(cutters, 0)   # un solo corte: evita intermedios degenerados
+    slot_cut, blades = _divider_parts(S, zone, fp, floor_min, H, wall, hollow, warns)
     if hollow and lid is not None:
         stats["bin_cm3"] = round(solid.volume() / 1000, 2)
         stats["lid_cm3"] = round(lid.volume() / 1000, 2)
@@ -413,6 +470,8 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
     if S["stacking_lip"]:
         solid = solid + (lip_ring_poly(fp, H) if is_partial else lip_ring(W, D, H))
         total_h = H + LIP_H
+    if slot_cut:   # las ranuras atraviesan tambien el labio de apilado: la lamina se inserta desde arriba
+        solid = solid - Manifold.batch_boolean(slot_cut, 0)
     if solid.is_empty():
         raise ValueError("el bin quedo vacio: reduce el grosor de pared / costilla o aumenta la rejilla")
     if lid is not None and lid.is_empty():
@@ -421,5 +480,12 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
     insert = Manifold.batch_boolean([m for m in inserts if m is not None], 0) if inserts else None
 
     checks = _printability(items, S, W, D, H, S["lid_thickness_mm"], hollow, stats, lid, len(warns))
+    if blades:
+        nz = float(S["nozzle_mm"])
+        if S["divider_thickness_mm"] < 2 * nz:
+            checks.append({"level": "warn", "code": "divider_thin", "shapes": [],
+                           "msg": f"el divisor ({S['divider_thickness_mm']:.1f} mm) es menor que 2 pasadas de boquilla ({2 * nz:.1f} mm)"})
+        checks.append({"level": "info", "code": "dividers", "shapes": [],
+                       "msg": f"{len(blades)} divisor(es) suelto(s) de {S['divider_thickness_mm']:.1f} mm: se imprimen tumbados (archivo aparte)"})
     return DesignResult(solid, insert, (nw, nd), (W, D), total_h, pockets_all, warns,
-                        {k: sorted(v) for k, v in problems.items()}, lid, stats, checks)
+                        {k: sorted(v) for k, v in problems.items()}, lid, stats, checks, _blade_row(blades))
