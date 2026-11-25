@@ -19,7 +19,7 @@
   </nav>
 </header>
 
-<main>
+<main id="main">
   <!-- ========== INICIO: subir foto + mis assets ========== -->
   <section id="view-home" class="view">
     <h1>De foto a bin Gridfinity</h1>
@@ -98,56 +98,81 @@
     </div>
   </section>
 
-  <!-- ========== BIN ========== -->
+  <!-- ========== EDITOR DEL BIN ========== -->
   <section id="view-bin" class="view hidden">
-    <div class="layout">
-      <div class="stage">
+    <div class="ed-head">
+      <button class="icon-btn" id="ed-back" title="Volver a la silueta" aria-label="Volver">‹</button>
+      <input id="ed-name" class="ed-title" maxlength="80" aria-label="Nombre del bin">
+      <span id="ed-saved" class="muted">Guardado</span>
+      <span class="grow"></span>
+      <a class="btn primary" id="dl-zip" href="#" download>⬇ Download STLs (.zip)</a>
+    </div>
+
+    <div class="ed-tabs card" id="ed-tabs"></div>
+
+    <div class="ed-grid">
+      <div class="card ed-layout">
+        <div class="card-h">2D Layout <span class="grow"></span><button class="link" id="btn-arrange" title="Reordenar todas las formas automáticamente">Auto-arrange</button></div>
+        <div class="lay-wrap"><svg id="lay-svg" tabindex="0" preserveAspectRatio="xMidYMid meet" aria-label="Disposición 2D"></svg></div>
+        <div class="toolbar" id="toolbar">
+          <button data-tool="rotate" title="Girar 90°">↻ Rotate</button>
+          <button data-tool="center" title="Centrar en el bin">Center</button>
+          <button data-tool="notch" title="Muesca para el dedo">◎ Finger Notch</button>
+          <button data-tool="pocket" title="Profundidad del bolsillo">☰ Pocket</button>
+          <button data-tool="edit" title="Editar la forma">✎ Edit Shape</button>
+          <span class="grow"></span>
+          <button data-tool="delete" class="tb-danger" title="Eliminar forma" aria-label="Eliminar forma">🗑</button>
+          <button data-tool="done" class="tb-ok" title="Terminar (deseleccionar)" aria-label="Listo">✓</button>
+        </div>
+        <div id="pop" class="pop hidden"></div>
+      </div>
+
+      <div class="card ed-3d">
+        <div class="card-h">3D Preview <span class="grow"></span><span id="ed-status" class="status"><i></i><b>Listo</b></span></div>
         <div id="viewer" class="viewer" aria-label="Vista previa 3D del bin"></div>
+        <div class="vbar" id="vbar">
+          <button data-view="reset" title="Vista isométrica">↺</button>
+          <button data-view="top" title="Vista superior">↑</button>
+          <button data-view="front" title="Vista frontal">→</button>
+          <button data-view="side" title="Vista lateral">⊙</button>
+          <button data-view="iso" title="Encuadrar">◇</button>
+          <span class="sep"></span>
+          <button data-view="palette" title="Cambiar colores">🎨</button>
+        </div>
         <div id="bin-info" class="info"></div>
         <ul id="bin-warn" class="warn"></ul>
       </div>
-      <aside class="panel scroll">
-        <h2>Bin settings</h2>
-        <fieldset>
-          <legend>Tamaño</legend>
-          <label class="check"><input type="checkbox" id="b-auto" checked> Tamaño automático</label>
-          <div class="row">
-            <label>Ancho (celdas) <input type="number" id="b-gw" min="1" max="12" value="3" disabled></label>
-            <label>Fondo (celdas) <input type="number" id="b-gd" min="1" max="12" value="3" disabled></label>
-          </div>
-          <label>Altura (unidades de 7 mm) <input type="number" id="b-hu" min="1" max="12" value="4"></label>
-          <label>Paso de rejilla (mm) <input type="number" id="b-unit" min="20" max="80" step="0.1" value="42"></label>
-        </fieldset>
-        <fieldset>
-          <legend>Cutout</legend>
-          <label>Holgura (mm) <input type="number" id="b-clr" min="0" max="5" step="0.1" value="1"></label>
-          <label>Profundidad (mm) <input type="number" id="b-depth" min="1" max="80" step="0.5" value="12"></label>
-          <label>Muescas para el dedo
-            <select id="b-finger">
-              <option value="none">Sin muescas</option>
-              <option value="one_end">Un extremo</option>
-              <option value="both_ends">Ambos extremos</option>
-            </select>
-          </label>
-          <label>Diámetro de la muesca (mm) <input type="number" id="b-fd" min="8" max="30" step="1" value="16"></label>
-          <label class="check"><input type="checkbox" id="b-holes"> Conservar huecos internos</label>
-        </fieldset>
-        <fieldset>
-          <legend>Extras</legend>
-          <label class="check"><input type="checkbox" id="b-lip" checked> Stacking lip</label>
-          <label class="check"><input type="checkbox" id="b-mag"> Agujeros para imanes</label>
-          <div class="row">
-            <label>Ø imán (mm) <input type="number" id="b-md" min="4" max="8.2" step="0.1" value="6.5"></label>
-            <label>Prof. (mm) <input type="number" id="b-mdep" min="1" max="4" step="0.1" value="2.4"></label>
-          </div>
-        </fieldset>
-        <div class="spacer"></div>
-        <button class="btn ghost" id="btn-back-shape">Volver a la silueta</button>
-        <button class="btn primary" id="btn-build">Generar bin</button>
-        <div class="row dl">
-          <a class="btn ghost" id="dl-stl" href="#" download>Descargar STL</a>
-          <a class="btn ghost" id="dl-svg" href="#" download>Descargar SVG</a>
+
+      <aside class="card settings">
+        <div class="card-h">Bin Settings <span class="grow"></span><button class="link" id="s-reset">Reset</button></div>
+        <h3 class="sec">Size</h3>
+        <label class="sw"><span>Auto size</span><input type="checkbox" id="s-auto"><i></i></label>
+        <div class="trio">
+          <div><span class="lbl">Width (grid)</span><div class="stepper"><input type="number" id="s-gw" min="1" max="12" step="1"><button data-step="s-gw" data-d="-1">−</button><button data-step="s-gw" data-d="1">+</button></div><small id="s-gw-mm"></small></div>
+          <div><span class="lbl">Depth (grid)</span><div class="stepper"><input type="number" id="s-gd" min="1" max="12" step="1"><button data-step="s-gd" data-d="-1">−</button><button data-step="s-gd" data-d="1">+</button></div><small id="s-gd-mm"></small></div>
+          <div><span class="lbl">Height units</span><div class="stepper"><input type="number" id="s-hu" min="1" max="12" step="1"><button data-step="s-hu" data-d="-1">−</button><button data-step="s-hu" data-d="1">+</button></div><small id="s-hu-mm"></small></div>
         </div>
+        <label>Grid unit size (mm)<input type="number" id="s-unit" min="20" max="80" step="0.5"></label>
+
+        <h3 class="sec">Pocket</h3>
+        <label>Depth (mm)<input type="number" id="s-depth" min="1" max="80" step="0.5"></label>
+        <label>Clearance around shape (mm)<input type="number" id="s-clr" min="0" max="5" step="0.1"></label>
+        <label class="sw"><span>Pocket chamfer</span><input type="checkbox" id="s-chamfer"><i></i></label>
+        <label class="sw"><span>Contrast insert</span><input type="checkbox" id="s-insert"><i></i></label>
+        <div class="duo">
+          <label>Thickness (mm)<input type="number" id="s-ithk" min="0.2" max="2" step="0.1"></label>
+          <label>Fit clearance (mm)<input type="number" id="s-ifit" min="0" max="1" step="0.05"></label>
+        </div>
+
+        <h3 class="sec">Structure</h3>
+        <label>Wall thickness (mm)<input type="number" id="s-wall" min="0.8" max="6" step="0.1"></label>
+        <label class="sw"><span>Stacking lip</span><input type="checkbox" id="s-lip"><i></i></label>
+        <label class="sw"><span>Magnet holes</span><input type="checkbox" id="s-mag"><i></i></label>
+        <div class="duo">
+          <label>Ø magnet (mm)<input type="number" id="s-md" min="4" max="8.2" step="0.1"></label>
+          <label>Depth (mm)<input type="number" id="s-mdep" min="1" max="4" step="0.1"></label>
+        </div>
+        <a class="link dl-extra" id="dl-svg" href="#" download>Descargar contorno SVG</a>
       </aside>
     </div>
   </section>

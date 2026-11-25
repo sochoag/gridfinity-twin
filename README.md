@@ -12,7 +12,7 @@ pip install -r requirements.txt
 ```
 
 Flujo: **Foto → Papel** (ajusta las 4 esquinas si hace falta) **→ Silueta** (elige qué objetos entran)
-**→ Bin** (parámetros, vista 3D, descargas). Todo queda guardado en `data/` y reaparece en *Mis assets*.
+**→ Bin** (editor como ShapeAny: formas arrastrables/rotables, muescas, bolsillo por forma, edición de contorno, chaflán, inserto de contraste, vista 3D y ZIP de STLs). Todo queda guardado en `data/` y reaparece en *Mis assets*.
 
 > Sin autenticación: déjalo en `127.0.0.1`. Si lo expones en una red, ponle un proxy con login delante.
 
@@ -32,8 +32,8 @@ Cámara lo más vertical posible, papel completo y plano, buena luz sin sombras 
 | `vision/validate.py`, `ref/` | Herramienta de desarrollo: compara con los contornos de referencia de la foto de prueba |
 
 ## API (resumen)
-`POST /api/sessions` (foto) · `POST /api/sessions/{id}/trace` · `POST /api/sessions/{id}/bin` ·
-`GET /api/sessions/{id}/bin.stl|bin.svg` · `GET|PATCH|DELETE /api/sessions[/{id}]`. Documentación interactiva en `/docs`.
+`POST /api/sessions` (foto) · `POST /api/sessions/{id}/trace` · `POST /api/sessions/{id}/design/init|arrange` · `GET|PUT /api/sessions/{id}/design` ·
+`GET /api/sessions/{id}/bin.stl|insert.stl|bin.zip|bin.svg` · `GET|PATCH|DELETE /api/sessions[/{id}]`. Documentación interactiva en `/docs`.
 
 ## Pruebas
 ```bash

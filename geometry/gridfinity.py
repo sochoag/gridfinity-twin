@@ -142,6 +142,41 @@ def finger_notch_polys(polys, mode, diameter):
     return out
 
 
+def make_shell(nw, nd, u, H, magnet_holes=False, magnet_d=6.5, magnet_depth=2.4):
+    """Pies + cuerpo (+ agujeros de imanes) de un bin de nw x nd celdas y altura de cuerpo H."""
+    W, D = nw * u - BIN_GAP, nd * u - BIN_GAP
+    feet = []
+    for i in range(nw):
+        for j in range(nd):
+            cx, cy = (i - (nw - 1) / 2) * u, (j - (nd - 1) / 2) * u
+            z, off = 0.0, -round(sum(dx for _, dx in FOOT_PROFILE), 4)
+            for h, dx in FOOT_PROFILE:
+                feet.append(loft_rrect(u - BIN_GAP, u - BIN_GAP, CORNER_R, z, round(z + h, 4), off,
+                                       round(off + dx, 4)).translate((round(cx, 4), round(cy, 4), 0)))
+                z = round(z + h, 4)
+                off = round(off + dx, 4)
+    base = Manifold.batch_boolean(feet, 0)
+    body = Manifold.extrude(CrossSection([rounded_rect(W - 2 * SEAM_EPS, D - 2 * SEAM_EPS, CORNER_R - SEAM_EPS)], FillRule.EvenOdd),
+                            round(H - FOOT_H, 4)).translate((0, 0, FOOT_H))
+    solid = base + body
+    if magnet_holes:
+        mags = [cylinder((i - (nw - 1) / 2) * u + sx * (u / 2 - 8.0), (j - (nd - 1) / 2) * u + sy * (u / 2 - 8.0),
+                         -0.01, magnet_depth, magnet_d)
+                for i in range(nw) for j in range(nd) for sx in (-1, 1) for sy in (-1, 1)]
+        solid = solid - Manifold.batch_boolean(mags, 0)
+    return solid
+
+
+def lip_ring(W, D, H):
+    """Anillo del stacking lip sobre un cuerpo de alto H."""
+    ring_outer = Manifold.extrude(CrossSection([rounded_rect(W, D, CORNER_R)], FillRule.EvenOdd), LIP_H).translate((0, 0, H))
+    cav, z = [], 0.0
+    for h, off0, off1 in [(1.9, -2.6, -0.7), (1.8, -0.7, -0.7), (0.7, -0.7, -LIP_TOP_FLAT)]:
+        cav.append(loft_rrect(W, D, CORNER_R, H + z, H + round(z + h, 4), off0, off1))
+        z = round(z + h, 4)
+    return ring_outer - Manifold.batch_boolean(cav, 0)
+
+
 # ---------------------------------------------------------------- generador
 def auto_grid(polys, cfg: BinConfig):
     margin = cfg.clearance_mm + (2.6 if cfg.stacking_lip else 1.2)
@@ -180,31 +215,7 @@ def build_bin(outer, holes, cfg: BinConfig = BinConfig()) -> BinResult:
     W, D = nw * u - BIN_GAP, nd * u - BIN_GAP
     H = cfg.height_units * HEIGHT_UNIT
 
-    # --- pies (uno por celda)
-    feet = []
-    for i in range(nw):
-        for j in range(nd):
-            cx, cy = (i - (nw - 1) / 2) * u, (j - (nd - 1) / 2) * u
-            z, off = 0.0, -round(sum(dx for _, dx in FOOT_PROFILE), 4)
-            for h, dx in FOOT_PROFILE:
-                feet.append(loft_rrect(u - BIN_GAP, u - BIN_GAP, CORNER_R, z, round(z + h, 4), off,
-                                       round(off + dx, 4)).translate((round(cx, 4), round(cy, 4), 0)))
-                z = round(z + h, 4)
-                off = round(off + dx, 4)
-    base = Manifold.batch_boolean(feet, 0)
-
-    # --- cuerpo
-    body = Manifold.extrude(CrossSection([rounded_rect(W - 2 * SEAM_EPS, D - 2 * SEAM_EPS, CORNER_R - SEAM_EPS)], FillRule.EvenOdd),
-                            round(H - FOOT_H, 4)) \
-        .translate((0, 0, FOOT_H))
-    solid = base + body
-
-    # --- imanes desde abajo
-    if cfg.magnet_holes:
-        mags = [cylinder((i - (nw - 1) / 2) * u + sx * (u / 2 - 8.0), (j - (nd - 1) / 2) * u + sy * (u / 2 - 8.0),
-                         -0.01, cfg.magnet_depth_mm, cfg.magnet_diameter_mm)
-                for i in range(nw) for j in range(nd) for sx in (-1, 1) for sy in (-1, 1)]
-        solid = solid - Manifold.batch_boolean(mags, 0)
+    solid = make_shell(nw, nd, u, H, cfg.magnet_holes, cfg.magnet_diameter_mm, cfg.magnet_depth_mm)
 
     # --- cutouts: contorno + clearance (+ muescas para el dedo)
     z_bot = H - cfg.cutout_depth_mm
@@ -220,17 +231,7 @@ def build_bin(outer, holes, cfg: BinConfig = BinConfig()) -> BinResult:
     # --- stacking lip (anillo sobre el cuerpo)
     total_h = H
     if cfg.stacking_lip:
-        ring_outer = Manifold.extrude(CrossSection([rounded_rect(W, D, CORNER_R)], FillRule.EvenOdd), LIP_H) \
-            .translate((0, 0, H))
-        cav = []
-        z = 0.0
-        for h, off0, off1 in [(1.9, -2.6, -0.7), (1.8, -0.7, -0.7), (0.7, -0.7, -LIP_TOP_FLAT)]:
-            cav.append(loft_rrect(W, D, CORNER_R, H + z, H + round(z + h, 4), off0, off1))
-            z = round(z + h, 4)
-        cav = Manifold.batch_boolean(cav, 0)
-        # margen para evitar caras coplanares al restar
-        cav = cav.translate((0, 0, 0))
-        solid = solid + (ring_outer - cav)
+        solid = solid + lip_ring(W, D, H)
         total_h = H + LIP_H
 
     return BinResult(solid, (nw, nd), (W, D), total_h, pockets, warns)
@@ -243,13 +244,35 @@ def to_trimesh(m: Manifold):
                            faces=np.asarray(mesh.tri_verts), process=False)  # manifold ya garantiza malla cerrada
 
 
-def export_stl(m: Manifold, path: str) -> dict:
-    """Exporta STL binario y lo vuelve a leer como lo haria un slicer (vertices fusionados) para validarlo."""
+def _check(path: str) -> tuple:
     import trimesh
-    to_trimesh(m).export(path)
     chk = trimesh.load(path, file_type="stl")
-    return {"watertight": bool(chk.is_watertight), "degenerate_faces": int((chk.area_faces < 1e-9).sum()),
-            "volume_cm3": round(float(chk.volume) / 1000, 2) if chk.is_watertight else None}
+    return chk, {"watertight": bool(chk.is_watertight), "degenerate_faces": int((chk.area_faces < 1e-12).sum()),
+                 "volume_cm3": round(float(chk.volume) / 1000, 2) if chk.is_watertight else None}
+
+
+def export_stl(m: Manifold, path: str) -> dict:
+    """Exporta STL binario y lo vuelve a leer como lo haria un slicer (vertices fusionados) para validarlo.
+
+    Si al pasar a float32 aparecen aristas abiertas o caras degeneradas (rebabas de ~1e-6 mm entre cortes casi
+    coincidentes), intenta repararlas y revalida; el resultado dice si hubo reparacion."""
+    to_trimesh(m).export(path)
+    chk, res = _check(path)
+    if res["watertight"] and res["degenerate_faces"] == 0:
+        return res
+    import trimesh
+    for _ in range(2):
+        chk.update_faces(chk.nondegenerate_faces())
+        chk.merge_vertices()
+        trimesh.repair.fill_holes(chk)
+        trimesh.repair.fix_normals(chk)
+        chk.export(path)
+        chk, res2 = _check(path)
+        if res2["watertight"] and res2["degenerate_faces"] == 0:
+            res2["repaired"] = True
+            return res2
+    res2["repaired"] = False
+    return res2
 
 
 def pockets_to_svg(pockets, path, margin=5.0):

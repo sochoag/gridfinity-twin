@@ -21,9 +21,14 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
 
-from geometry.gridfinity import BinConfig, build_bin, export_stl, pockets_to_svg
+import io
+import threading
+import zipfile
+
+from geometry.design import DEFAULT_SETTINGS, FINGER_D, arrange, build_design, default_notch, local_polygon
+from geometry.gridfinity import export_stl, pockets_to_svg
 from vision import pipeline as P
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -135,21 +140,61 @@ class TraceParams(BaseModel):
     keep_holes: bool = True
 
 
-class BinParams(BaseModel):
-    components: Optional[list[int]] = None
-    grid_width: Optional[int] = Field(None, ge=1, le=12)
-    grid_depth: Optional[int] = Field(None, ge=1, le=12)
+class Notch(BaseModel):
+    on: bool = False
+    d: float = Field(FINGER_D, ge=6, le=40)
+    u: float = Field(0.0, ge=-1000, le=1000)
+    v: float = Field(0.0, ge=-1000, le=1000)
+
+
+class ShapeIn(BaseModel):
+    id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    name: str = Field("Forma", max_length=80)
+    comp: int = Field(..., ge=0, le=200)
+    x: float = Field(0.0, ge=-2000, le=2000)
+    y: float = Field(0.0, ge=-2000, le=2000)
+    rot: float = Field(0.0, ge=-3600, le=3600)
+    mirror: bool = False
+    offset_mm: float = Field(0.0, ge=-5, le=10)
+    depth_mm: Optional[float] = Field(None, ge=1, le=80)
+    keep_holes: bool = False
+    notch: Notch = Notch()
+    outer: Optional[list[list[float]]] = Field(None, max_length=5000)
+    holes: Optional[list[list[list[float]]]] = Field(None, max_length=60)
+
+
+class SettingsIn(BaseModel):
+    auto_size: bool = True
+    grid_width: int = Field(4, ge=1, le=12)
+    grid_depth: int = Field(4, ge=1, le=12)
+    height_units: int = Field(3, ge=1, le=12)
     grid_unit_mm: float = Field(42.0, ge=20, le=80)
-    height_units: int = Field(4, ge=1, le=12)
+    pocket_depth_mm: float = Field(12.0, ge=1, le=80)
+    pocket_chamfer: bool = True
+    chamfer_mm: float = Field(1.0, ge=0.2, le=3)
     clearance_mm: float = Field(1.0, ge=0, le=5)
-    cutout_depth_mm: float = Field(12.0, ge=1, le=80)
+    contrast_insert: bool = True
+    insert_thickness_mm: float = Field(0.4, ge=0.2, le=2)
+    fit_clearance_mm: float = Field(0.2, ge=0, le=1)
+    wall_thickness_mm: float = Field(1.6, ge=0.8, le=6)
     stacking_lip: bool = True
     magnet_holes: bool = False
     magnet_diameter_mm: float = Field(6.5, ge=4, le=8.2)
     magnet_depth_mm: float = Field(2.4, ge=1, le=4)
-    finger_notches: Literal["none", "one_end", "both_ends"] = "none"
-    finger_diameter_mm: float = Field(16.0, ge=8, le=30)
-    keep_holes: bool = False
+
+
+class DesignIn(BaseModel):
+    settings: SettingsIn = SettingsIn()
+    shapes: list[ShapeIn] = Field(..., min_length=1, max_length=40)
+
+
+class InitIn(BaseModel):
+    components: Optional[list[int]] = None
+
+
+class ArrangeIn(BaseModel):
+    settings: SettingsIn = SettingsIn()
+    shapes: list[ShapeIn] = Field(..., min_length=1, max_length=40)
 
 
 class Rename(BaseModel):
@@ -256,56 +301,150 @@ def trace(sid: str, body: TraceParams):
                    "width_mm": r.paper_mm[0], "height_mm": r.paper_mm[1]}
     st["contours"] = contours_payload(r)
     st["bin_meta"] = None
+    st["design"] = None
     write_state(d, st)
     return st["contours"]
 
 
-@app.post("/api/sessions/{sid}/bin")
-def make_bin(sid: str, body: BinParams):
-    d = sdir(sid)
-    st = read_state(d)
+_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _swap(tmp: Path, final: Path):
+    tmp.replace(final)   # atomico: una descarga en curso sigue leyendo el archivo anterior
+
+
+def _comps(st: dict) -> list[dict]:
     if not st.get("contours"):
         raise HTTPException(409, "primero traza la silueta")
-    comps = st["contours"]["components"]
+    return st["contours"]["components"]
+
+
+def _safe_name(st: dict) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", st["name"]).strip("_") or "bin"
+
+
+@app.post("/api/sessions/{sid}/design/init")
+def design_init(sid: str, body: InitIn):
+    """Crea el diseno inicial: una forma por objeto elegido, ordenadas automaticamente."""
+    d = sdir(sid)
+    st = read_state(d)
+    comps = _comps(st)
     sel = body.components if body.components is not None else [c["id"] for c in comps]
     if not sel or any(i < 0 or i >= len(comps) for i in sel):
         raise HTTPException(422, "seleccion de componentes invalida")
-    outer = [comps[i]["outer"] for i in range(len(comps))]
-    holes = [h for c in comps for h in c["holes"]]
-    cfg = BinConfig(components=sel, **body.model_dump(exclude={"components"}))
+    S = dict(DEFAULT_SETTINGS)
+    shapes = [{"id": f"s{n + 1}", "name": f"{st['name']}\u00b7P{n + 1}", "comp": i, "x": 0.0, "y": 0.0, "rot": 0.0,
+               "mirror": False, "offset_mm": 0.0, "depth_mm": None, "keep_holes": False} for n, i in enumerate(sel)]
+    polys = [local_polygon(comps[sh["comp"]], sh) for sh in shapes]
+    for sh, p, (x, y, r) in zip(shapes, polys, arrange(polys, S["clearance_mm"] + 2.0, S["grid_unit_mm"], S["wall_thickness_mm"])):
+        u_, v_ = default_notch(p)
+        sh.update(x=x, y=y, rot=r, notch={"on": False, "d": FINGER_D, "u": u_, "v": v_})
+    design = {"settings": S, "shapes": shapes}
+    st["design"], st["bin_meta"] = design, None
+    write_state(d, st)
+    return design
+
+
+@app.get("/api/sessions/{sid}/design")
+def design_get(sid: str):
+    return read_state(sdir(sid)).get("design")
+
+
+@app.post("/api/sessions/{sid}/design/arrange")
+def design_arrange(sid: str, body: ArrangeIn):
+    st = read_state(sdir(sid))
+    comps = _comps(st)
+    shapes = [s.model_dump() for s in body.shapes]
+    if any(s["comp"] >= len(comps) for s in shapes):
+        raise HTTPException(422, "componente inexistente")
+    S = body.settings
+    polys = []
+    for sh in shapes:
+        p = local_polygon(comps[sh["comp"]], sh)
+        p = p.buffer(sh["offset_mm"], 12) if sh["offset_mm"] else p
+        n = sh["notch"]
+        if n["on"]:
+            p = p.union(Point(n["u"], n["v"]).buffer(n["d"] / 2, 24))
+        polys.append(p)
+    res = arrange(polys, S.clearance_mm + 2.0, S.grid_unit_mm, S.wall_thickness_mm)
+    return [{"id": sh["id"], "x": x, "y": y, "rot": r} for sh, (x, y, r) in zip(shapes, res)]
+
+
+@app.put("/api/sessions/{sid}/design")
+def design_build(sid: str, body: DesignIn):
+    d = sdir(sid)
+    st = read_state(d)
+    comps = _comps(st)
+    shapes = [s.model_dump() for s in body.shapes]
+    S = body.settings.model_dump()
+    if any(s["comp"] >= len(comps) for s in shapes):
+        raise HTTPException(422, "componente inexistente")
+    if len({s["id"] for s in shapes}) != len(shapes):
+        raise HTTPException(422, "ids de forma repetidos")
     t0 = time.time()
     try:
-        r = build_bin(outer, holes, cfg)
+        r = build_design(comps, shapes, S)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(422, f"no se pudo generar el bin: {e}")
-    mesh_check = export_stl(r.manifold, str(d / "bin.stl"))
-    if not mesh_check["watertight"]:
-        r.warnings.append("la malla exportada no es cerrada: revisa los parametros o repara el STL en tu slicer")
+    with _LOCKS.setdefault(sid, threading.Lock()):
+        chk = export_stl(r.bin, str(d / "bin.tmp.stl"))
+        _swap(d / "bin.tmp.stl", d / "bin.stl")
+        if not chk["watertight"]:
+            r.warnings.append("la malla exportada no es cerrada: revisa los parametros o repara el STL en tu slicer")
+        ichk = None
+        ins = d / "insert.stl"
+        if r.insert is not None:
+            ichk = export_stl(r.insert, str(d / "insert.tmp.stl"))
+            _swap(d / "insert.tmp.stl", ins)
+        elif ins.exists():
+            ins.unlink()
     pockets_to_svg(r.pockets, str(d / "bin.svg"))
     meta = {"grid": list(r.grid), "size_mm": [round(r.size_mm[0], 1), round(r.size_mm[1], 1)],
-            "total_height_mm": round(r.total_height_mm, 1), "warnings": r.warnings,
-            "mesh": mesh_check, "build_seconds": round(time.time() - t0, 2), "stamp": int(time.time() * 1000)}
-    st["bin_params"], st["bin_meta"] = body.model_dump(), meta
+            "total_height_mm": round(r.total_height_mm, 1), "warnings": r.warnings, "problems": r.problems,
+            "mesh": chk, "insert": ichk, "has_insert": r.insert is not None,
+            "build_seconds": round(time.time() - t0, 2), "stamp": int(time.time() * 1000)}
+    st["design"], st["bin_meta"] = {"settings": S, "shapes": shapes}, meta
     write_state(d, st)
     return meta
 
 
 @app.get("/api/sessions/{sid}/bin.stl")
 def bin_stl(sid: str):
-    f = sdir(sid) / "bin.stl"
-    if not f.exists():
+    d = sdir(sid)
+    if not (d / "bin.stl").exists():
         raise HTTPException(404, "aun no hay bin")
-    name = re.sub(r"[^A-Za-z0-9_-]+", "_", read_state(sdir(sid))["name"]) or "bin"
-    return FileResponse(f, media_type="model/stl", filename=f"{name}_bin.stl")
+    return FileResponse(d / "bin.stl", media_type="model/stl", filename=f"{_safe_name(read_state(d))}_bin.stl")
+
+
+@app.get("/api/sessions/{sid}/insert.stl")
+def insert_stl(sid: str):
+    d = sdir(sid)
+    if not (d / "insert.stl").exists():
+        raise HTTPException(404, "este bin no tiene inserto")
+    return FileResponse(d / "insert.stl", media_type="model/stl", filename=f"{_safe_name(read_state(d))}_insert.stl")
+
+
+@app.get("/api/sessions/{sid}/bin.zip")
+def bin_zip(sid: str):
+    d = sdir(sid)
+    if not (d / "bin.stl").exists():
+        raise HTTPException(404, "aun no hay bin")
+    n = _safe_name(read_state(d))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.write(d / "bin.stl", f"{n}_bin.stl")
+        if (d / "insert.stl").exists():
+            z.write(d / "insert.stl", f"{n}_insert.stl")
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{n}_stls.zip"'})
 
 
 @app.get("/api/sessions/{sid}/bin.svg")
 def bin_svg(sid: str):
-    f = sdir(sid) / "bin.svg"
-    if not f.exists():
+    d = sdir(sid)
+    if not (d / "bin.svg").exists():
         raise HTTPException(404, "aun no hay bin")
-    name = re.sub(r"[^A-Za-z0-9_-]+", "_", read_state(sdir(sid))["name"]) or "bin"
-    return FileResponse(f, media_type="image/svg+xml", filename=f"{name}_shape.svg")
+    return FileResponse(d / "bin.svg", media_type="image/svg+xml", filename=f"{_safe_name(read_state(d))}_shape.svg")
 
 
 @app.get("/api/health")

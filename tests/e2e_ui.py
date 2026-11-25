@@ -65,50 +65,182 @@ try:
         check("excluir objeto", pg.locator("#shape-svg .comp.off").count() == 1)
         pg.locator("#shape-svg .comp").first.click(force=True)
         check("incluir objeto (clic en el SVG)", pg.locator("#shape-svg .comp.off").count() == 0)
-        # dejar solo las pinzas (3er objeto)
-        for i in (0, 1, 3): pg.locator("#comp-list li").nth(i).click()
-        check("solo 1 objeto seleccionado", pg.locator("#shape-svg .comp.off").count() == 3)
+        # dejar 3 objetos: excluir el 1o
+        pg.locator("#comp-list li").first.click()
+        check("2 objetos seleccionados", pg.locator("#shape-svg .comp.off").count() == 1)
+        pg.locator("#comp-list li").first.click()
+        pg.locator("#comp-list li").nth(1).click()
+        check("3 objetos seleccionados", pg.locator("#shape-svg .comp.off").count() == 1)
 
-        # 3) bin
+        # 3) editor del bin
         pg.click("#btn-to-bin")
         pg.wait_for_selector("#view-bin:not(.hidden)")
-        pg.wait_for_selector("#bin-info span", timeout=60000)
+        def ready(t=60000):
+            pg.wait_for_function("document.querySelector('#ed-status b').textContent === 'Listo' && document.querySelector('#ed-saved').textContent === 'Guardado' && document.querySelector('#bin-info span')", timeout=t)
+            pg.wait_for_timeout(250)
+        ready()
+        S = lambda js: pg.evaluate("() => { const S = window.__twin; const d = S.st.design; " + js + " }")
         info = pg.inner_text("#bin-info")
         check("info del bin con malla cerrada", "cerrada" in info, info.replace("\n", " | "))
-        pg.wait_for_timeout(1500)
-        px = pg.evaluate("""() => { const c = document.querySelector('#viewer canvas'); if (!c) return null;
-            const t = document.createElement('canvas'); t.width = c.width; t.height = c.height; return null; }""")
-        check("canvas WebGL presente", pg.locator("#viewer canvas").count() == 1)
-        pg.screenshot(path=f"{SHOTS}/4_bin.png")
-        # el modelo debe aparecer: comparar el viewer con y sin pieza mediante captura
-        shot = pg.locator("#viewer").screenshot()
-        import io
-        from PIL import Image
-        im = Image.open(io.BytesIO(shot)).convert("RGB"); w, hh = im.size
-        orange = sum(1 for x in range(0, w, 4) for y in range(0, hh, 4) if (lambda r, g, b: r > 150 and 60 < g < 140 and b < 90)(*im.getpixel((x, y))))
-        check("el modelo naranja se ve en el visor", orange > 300, f"(pixeles naranja muestreados: {orange})")
+        check("3 pestañas de forma", pg.locator("#ed-tabs .tab").count() == 3 and "Shapes (3)" in pg.inner_text("#ed-tabs"))
+        check("3 formas en el layout 2D", pg.locator("#lay-svg .shp").count() == 3)
+        check("sin solapes ni salidas del bin", S("return Object.keys(S.st.bin_meta.problems).length") == 0)
+        check("ajustes por defecto como ShapeAny", S("return [d.settings.height_units, d.settings.wall_thickness_mm, d.settings.insert_thickness_mm, d.settings.fit_clearance_mm, d.settings.pocket_chamfer, d.settings.contrast_insert].join()") == "3,1.6,0.4,0.2,true,true")
+        check("auto size: ancho/fondo deshabilitados", pg.is_disabled("#s-gw") and pg.is_disabled("#s-gd") and pg.is_checked("#s-auto"))
+        check("mm bajo el ancho", "mm" in pg.inner_text("#s-gw-mm"), pg.inner_text("#s-gw-mm"))
+        pg.screenshot(path=f"{SHOTS}/4_editor.png")
 
-        # cambiar parametros: imanes + muescas + 5 unidades de alto -> regenerar
-        pg.check("#b-mag"); pg.select_option("#b-finger", "one_end"); pg.fill("#b-hu", "5")
-        pg.fill("#b-depth", "20")
-        with pg.expect_response(lambda r: r.url.endswith("/bin") and r.request.method == "POST") as ri:
-            pg.click("#btn-build")
-        check("regenerar con otros parametros (HTTP 200)", ri.value.status == 200)
-        pg.wait_for_function("document.querySelector('#bin-info').innerText.includes('40.4') || document.querySelector('#bin-info').innerText.includes('39.4')", timeout=60000) if False else pg.wait_for_timeout(1500)
+        def inside(i):
+            return pg.evaluate("""(i) => { const g = document.querySelectorAll('#lay-svg .shp')[i]; const p = g.querySelector('.shp-body');
+                const bb = p.getBBox(); const m = p.getScreenCTM();
+                for (let k = 0; k < 4000; k++) { const x = bb.x + Math.random() * bb.width, y = bb.y + Math.random() * bb.height;
+                    const pt = new DOMPoint(x, y); if (p.isPointInFill(pt)) { const q = pt.matrixTransform(m); return [q.x, q.y]; } } return null; }""", i)
+        def sw(sel, want=True):
+            if pg.is_checked(sel) != want: pg.click(f"label:has({sel})")
+            assert pg.is_checked(sel) == want, sel
+        def drag(x0, y0, x1, y1, steps=8):
+            pg.mouse.move(x0, y0); pg.mouse.down(); pg.mouse.move(x1, y1, steps=steps); pg.mouse.up()
+
+        # seleccionar con clic y mover arrastrando
+        x0, y0 = inside(0)
+        pg.mouse.click(x0, y0)
+        check("clic selecciona la forma (caja punteada + manija)", pg.locator(".sel-box").count() == 1 and pg.locator(".rot-handle").count() == 1)
+        sid = S("return S.st.design.shapes[0].id")
+        sel = S("return d.shapes.findIndex(s => s.id === document.querySelector('.shp.sel').dataset.shape)")
+        before = S("const s = d.shapes[" + str(0) + "]; return [s.x, s.y]")
+        idx = pg.evaluate("() => [...document.querySelectorAll('#lay-svg .shp')].findIndex(g => g.classList.contains('sel'))")
+        pos0 = S(f"const s = d.shapes[{idx}]; return [s.x, s.y]")
+        drag(x0, y0, x0 + 30, y0 + 20)
+        pos1 = S(f"const s = d.shapes[{idx}]; return [s.x, s.y]")
+        check("arrastrar mueve la forma", abs(pos1[0] - pos0[0]) > 1 or abs(pos1[1] - pos0[1]) > 1, f"{pos0} -> {pos1}")
+        ready()
+        check("se reconstruye tras mover (sigue cerrada)", S("return S.st.bin_meta.mesh.watertight"))
+
+        # rotar 90 con el boton
+        r0 = S(f"return d.shapes[{idx}].rot")
+        pg.click("[data-tool=rotate]")
+        r1 = S(f"return d.shapes[{idx}].rot")
+        check("Rotate gira 90°", abs(((r1 - r0) % 360) - 90) < 0.01, f"{r0} -> {r1}")
+        # rotar con la manija
+        h = pg.locator(".rot-handle").bounding_box()
+        hx, hy = h["x"] + h["width"] / 2, h["y"] + h["height"] / 2
+        drag(hx, hy, hx + 60, hy - 40, steps=10)
+        r2 = S(f"return d.shapes[{idx}].rot")
+        check("la manija gira libremente", abs(r2 - r1) > 5, f"{r1} -> {r2}")
+        # centrar
+        pg.click("[data-tool=center]")
+        c = pg.evaluate("""() => { const b = document.querySelector('.sel-box'); return [+b.getAttribute('x') + b.getAttribute('width') / 2, +b.getAttribute('y') + b.getAttribute('height') / 2]; }""")
+        check("Center deja la forma en el centro del bin", abs(c[0]) < 0.6 and abs(c[1]) < 0.6, str(c))
+
+        # muesca para el dedo
+        pg.click("[data-tool=notch]")
+        check("panel de muesca visible", pg.is_visible("#pop") and pg.is_visible("label:has(#p-n-on)"))
+        sw("#p-n-on", True)
+        check("la muesca aparece en el layout", pg.locator("#lay-svg .notch").count() == 1)
+        ready()
+        nb = pg.locator("#lay-svg .notch").bounding_box()
+        uv0 = S(f"const n = d.shapes[{idx}].notch; return [n.u, n.v]")
+        drag(nb["x"] + nb["width"] / 2, nb["y"] + nb["height"] / 2, nb["x"] + nb["width"] / 2 + 25, nb["y"] + nb["height"] / 2 + 15)
+        uv1 = S(f"const n = d.shapes[{idx}].notch; return [n.u, n.v]")
+        check("la muesca se arrastra", abs(uv1[0] - uv0[0]) + abs(uv1[1] - uv0[1]) > 1, f"{uv0} -> {uv1}")
+        pg.fill("#p-n-d", "20"); pg.press("#p-n-d", "Tab")
+        check("diametro de muesca", S(f"return d.shapes[{idx}].notch.d") == 20)
+
+        # bolsillo por forma
+        pg.click("[data-tool=pocket]")
+        pg.fill("#p-depth", "8"); pg.press("#p-depth", "Tab")
+        check("profundidad propia de la forma", S(f"return d.shapes[{idx}].depth_mm") == 8)
+        ready()
+        check("la malla sigue cerrada con 2 profundidades", S("return S.st.bin_meta.mesh.watertight && S.st.bin_meta.insert.watertight"))
+
+        pg.click("#btn-arrange"); ready()   # tras mover/centrar hay solapes: ordenar antes de editar el contorno
+        # editar forma: offset, espejo y puntos
+        pg.click("[data-tool=edit]")
+        pg.fill("#p-off", "1.5"); pg.press("#p-off", "Tab")
+        check("offset de forma", S(f"return d.shapes[{idx}].offset_mm") == 1.5)
+        u_before = S(f"return d.shapes[{idx}].notch.u")
+        pg.click("#p-mirror")
+        check("Mirror invierte forma y muesca", S(f"return d.shapes[{idx}].mirror") is True and abs(S(f"return d.shapes[{idx}].notch.u") + u_before) < 0.01)
+        pg.click("#p-pts")
+        nv = pg.locator("#lay-svg .vtx").count()
+        check("modo puntos: vertices visibles", nv > 6 and pg.locator("#lay-svg .vtx-mid").count() == nv, f"({nv} puntos)")
+        v = pg.locator("#lay-svg .vtx").nth(2).bounding_box()
+        p0 = S(f"return d.shapes[{idx}].outer[2]")
+        drag(v["x"] + v["width"] / 2, v["y"] + v["height"] / 2, v["x"] + v["width"] / 2 + 12, v["y"] + v["height"] / 2 + 8)
+        p1 = S(f"return d.shapes[{idx}].outer[2]")
+        check("arrastrar un vertice lo mueve", abs(p1[0] - p0[0]) + abs(p1[1] - p0[1]) > 1, f"{p0} -> {p1}")
+        m = pg.locator("#lay-svg .vtx-mid").nth(4).bounding_box()
+        drag(m["x"] + m["width"] / 2, m["y"] + m["height"] / 2, m["x"] + m["width"] / 2 + 6, m["y"] + m["height"] / 2 + 6, steps=4)
+        check("arrastrar un punto medio añade un vertice", pg.locator("#lay-svg .vtx").count() == nv + 1)
+        pg.locator("#lay-svg .vtx").nth(5).dblclick()
+        check("doble clic borra un vertice", pg.locator("#lay-svg .vtx").count() == nv)
+        ready()
+        check("con contorno editado el bin sigue valido", S("return S.st.bin_meta.mesh.watertight"))
+        pg.click("#p-reset")
+        check("Reset contour quita la edicion", S(f"return d.shapes[{idx}].outer === undefined"))
+        pg.click("[data-tool=done]")
+        check("✓ deselecciona", pg.locator(".sel-box").count() == 0)
+
+        # pestañas: renombrar, duplicar, añadir, eliminar
+        pg.locator("#ed-tabs .tab .tab-more").first.click()
+        pg.click(".menu >> text=Renombrar")
+        pg.fill(".tab-input", "Mi pieza"); pg.press(".tab-input", "Enter")
+        check("renombrar forma", "Mi pieza" in pg.inner_text("#ed-tabs"))
+        pg.locator("#ed-tabs .tab .tab-more").first.click(); pg.click(".menu >> text=Duplicar")
+        check("duplicar añade una pestaña", pg.locator("#ed-tabs .tab").count() == 4)
+        pg.click(".tab-plus"); pg.locator(".menu button").first.click()
+        check("+ añade un objeto detectado", pg.locator("#ed-tabs .tab").count() == 5)
+        pg.locator("#ed-tabs .tab .tab-more").nth(4).click(); pg.click(".menu >> text=Eliminar")
+        pg.locator("#ed-tabs .tab .tab-more").nth(3).click(); pg.click(".menu >> text=Eliminar")
+        check("eliminar quita pestañas", pg.locator("#ed-tabs .tab").count() == 3 and pg.locator("#lay-svg .shp").count() == 3)
+        ready()
+        check("sin errores del bin tras editar pestañas", S("return S.st.bin_meta.mesh.watertight"))
+        pg.click("#btn-arrange"); ready()
+        check("Auto-arrange coloca sin solapes", S("return Object.keys(S.st.bin_meta.problems).length") == 0)
+
+        # ajustes del bin
+        pg.fill("#s-hu", "5"); pg.press("#s-hu", "Tab"); ready()
         info2 = pg.inner_text("#bin-info")
         check("alto = 5*7 + 4.4 = 39.4 mm", "39.4" in info2, info2.replace("\n", " | "))
+        pg.click("[data-step=s-hu][data-d='-1']"); ready()
+        check("stepper − baja la altura", pg.input_value("#s-hu") == "4" and "32.4" in pg.inner_text("#bin-info"))
+        sw("#s-auto", False)
+        check("auto off habilita ancho/fondo con la rejilla actual", not pg.is_disabled("#s-gw") and pg.input_value("#s-gw") == str(S("return S.st.bin_meta.grid[0]")))
+        gw0 = int(pg.input_value("#s-gw"))
+        pg.click("[data-step=s-gw][data-d='1']"); ready()
+        check("ensanchar la rejilla", S("return S.st.bin_meta.grid[0]") == gw0 + 1)
+        sw("#s-auto", True); ready()
+        sw("#s-insert", False); ready()
+        check("sin inserto: no hay STL de inserto", S("return S.st.bin_meta.has_insert") is False and pg.is_disabled("#s-ithk"))
+        sw("#s-insert", True); sw("#s-chamfer", False); sw("#s-mag", True); pg.fill("#s-wall", "2"); pg.press("#s-wall", "Tab"); ready()
+        check("imanes+sin chaflan+pared 2: malla cerrada", S("return S.st.bin_meta.mesh.watertight && S.st.bin_meta.has_insert"))
+        pg.click("#s-reset"); ready()
+        check("Reset restaura los ajustes", pg.input_value("#s-hu") == "3" and not pg.is_checked("#s-mag") and pg.is_checked("#s-chamfer"))
+
+        # visor 3D: bin oscuro + inserto naranja
+        pg.wait_for_timeout(800)
+        import io
+        from PIL import Image
+        shot = pg.locator("#viewer").screenshot()
+        im = Image.open(io.BytesIO(shot)).convert("RGB"); w, hh = im.size
+        px = [im.getpixel((x, y)) for x in range(0, w, 4) for y in range(0, hh, 4)]
+        orange = sum(1 for r, g, b in px if r > 150 and 60 < g < 140 and b < 90)
+        dark = sum(1 for r, g, b in px if r < 90 and g < 90 and b < 95)
+        check("el visor muestra bin oscuro e inserto naranja", orange > 100 and dark > 1000, f"(naranja={orange}, oscuro={dark})")
+        for vname in ("top", "front", "side", "iso", "palette", "reset"): pg.click(f"[data-view={vname}]")
+        pg.wait_for_timeout(500)
+        pg.screenshot(path=f"{SHOTS}/5_editor_final.png")
+
         # descargas
-        with pg.expect_download() as d1: pg.click("#dl-stl")
-        f1 = d1.value; path = f1.path()
-        data = open(path, "rb").read()
-        check("descarga STL binario", len(data) > 50000 and not data[:5] == b"solid", f"({len(data)//1024} KB, {f1.suggested_filename})")
+        with pg.expect_download() as d1: pg.click("#dl-zip")
+        f1 = d1.value
+        import zipfile
+        zf = zipfile.ZipFile(f1.path())
+        names = sorted(zf.namelist())
+        check("descarga ZIP con bin + inserto", len(names) == 2 and names[0].endswith("_bin.stl") and names[1].endswith("_insert.stl"), f"{f1.suggested_filename} {names}")
+        check("STL binario válido en el zip", len(zf.read(names[0])) > 50000 and not zf.read(names[0])[:5] == b"solid")
         with pg.expect_download() as d2: pg.click("#dl-svg")
         check("descarga SVG", open(d2.value.path()).read().startswith("<svg"), d2.value.suggested_filename)
-        # validacion: parametro fuera de rango -> mensaje de error visible
-        pg.fill("#b-md", "30"); pg.check("#b-mag"); pg.click("#btn-build")
-        pg.wait_for_selector("#toast.err", timeout=10000)
-        check("error de validacion se muestra", "magnet_diameter_mm" in pg.inner_text("#toast"), pg.inner_text("#toast"))
-        pg.fill("#b-md", "6.5")
 
         # 4) assets
         pg.click(".step[data-step=home]")
@@ -121,8 +253,9 @@ try:
         pg.reload(); pg.wait_for_selector(".asset")
         check("renombrar persiste tras recargar", pg.input_value(".asset .name") == "Pinzas pequenas")
         pg.click(".asset .btn.primary")
-        pg.wait_for_selector("#view-bin:not(.hidden)", timeout=20000); pg.wait_for_selector("#bin-info span")
-        check("reabrir asset lleva al bin con parametros guardados", pg.input_value("#b-hu") == "5" and pg.is_checked("#b-mag"))
+        pg.wait_for_selector("#view-bin:not(.hidden)", timeout=20000); pg.wait_for_selector("#bin-info span", timeout=30000)
+        pg.wait_for_selector("#lay-svg .shp"); pg.wait_for_function("document.querySelector('#ed-status b').textContent === 'Listo'")
+        check("reabrir asset restaura formas y ajustes", pg.locator("#lay-svg .shp").count() == 3 and pg.input_value("#s-hu") == "3" and pg.locator("#ed-tabs .tab").count() == 3)
         pg.wait_for_timeout(1200); pg.screenshot(path=f"{SHOTS}/6_reopened.png")
         # eliminar (dos clics)
         pg.click(".step[data-step=home]"); pg.wait_for_selector(".asset")

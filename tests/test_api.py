@@ -40,18 +40,43 @@ def test_full_flow():
     assert any(k["holes"] for k in cont["components"])
 
     assert c.get(f"/api/sessions/{sid}/rectified.jpg").status_code == 200
-    r = c.post(f"/api/sessions/{sid}/bin", json={"components": [2], "height_units": 4, "cutout_depth_mm": 14,
-                                                  "magnet_holes": True, "finger_notches": "one_end"})
+    # diseno: init -> editar -> construir
+    r = c.post(f"/api/sessions/{sid}/design/init", json={"components": [0, 2]})
+    assert r.status_code == 200, r.text
+    des = r.json()
+    assert [s["comp"] for s in des["shapes"]] == [0, 2] and des["settings"]["auto_size"] is True
+    des["settings"].update(height_units=4, pocket_depth_mm=14, magnet_holes=True)
+    des["shapes"][0]["notch"]["on"] = True
+    des["shapes"][1]["depth_mm"] = 9
+    r = c.put(f"/api/sessions/{sid}/design", json=des)
     assert r.status_code == 200, r.text
     meta = r.json()
-    assert meta["grid"] == [3, 4] and meta["warnings"] == []
+    assert meta["problems"] == {} and meta["warnings"] == []
     assert meta["mesh"]["watertight"] and meta["mesh"]["degenerate_faces"] == 0
-    stl = c.get(f"/api/sessions/{sid}/bin.stl")
-    assert stl.status_code == 200
+    assert meta["has_insert"] and meta["insert"]["watertight"]
     import io
-    tm = trimesh.load(io.BytesIO(stl.content), file_type="stl")
+    import zipfile
+    tm = trimesh.load(io.BytesIO(c.get(f"/api/sessions/{sid}/bin.stl").content), file_type="stl")
     assert tm.is_watertight and abs(tm.bounds[1][2] - 32.4) < 0.05
+    ti = trimesh.load(io.BytesIO(c.get(f"/api/sessions/{sid}/insert.stl").content), file_type="stl")
+    assert ti.is_watertight and ti.volume > 1000   # dos profundidades -> dos alturas de inserto
+    z = zipfile.ZipFile(io.BytesIO(c.get(f"/api/sessions/{sid}/bin.zip").content))
+    assert sorted(n.rsplit("_", 1)[1] for n in z.namelist()) == ["bin.stl", "insert.stl"]
     assert c.get(f"/api/sessions/{sid}/bin.svg").text.startswith("<svg")
+    assert c.get(f"/api/sessions/{sid}/design").json()["shapes"][1]["depth_mm"] == 9
+
+    # mover una forma fuera del bin fijo y solapar: debe avisarse
+    des["settings"].update(auto_size=False, grid_width=2, grid_depth=2)
+    des["shapes"][1].update(x=des["shapes"][0]["x"], y=des["shapes"][0]["y"])
+    m2 = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert "overlap" in m2["problems"]["s1"] and "outside" in m2["problems"]["s2"] and m2["warnings"]
+    # sin inserto no debe quedar el STL viejo
+    des["settings"]["contrast_insert"] = False
+    assert c.put(f"/api/sessions/{sid}/design", json=des).json()["has_insert"] is False
+    assert c.get(f"/api/sessions/{sid}/insert.stl").status_code == 404
+    # auto-ordenar
+    ar = c.post(f"/api/sessions/{sid}/design/arrange", json=des).json()
+    assert [a["id"] for a in ar] == ["s1", "s2"]
 
     # biblioteca
     lst = c.get("/api/sessions").json()
@@ -64,7 +89,7 @@ def test_full_flow():
 def test_validation():
     st = _session()
     sid = st["id"]
-    assert c.post(f"/api/sessions/{sid}/bin", json={}).status_code == 409           # sin trazado
+    assert c.post(f"/api/sessions/{sid}/design/init", json={}).status_code == 409   # sin trazado
     assert c.get("/api/sessions/../../etc/passwd/source.jpg").status_code in (400, 404)
     assert c.get("/api/sessions/xyz/source.jpg").status_code == 400
     bad = c.post(f"/api/sessions/{sid}/trace", json={"corners": [[0, 0], [1, 0], [1, 1], [0, 1]], "paper": "A4"})
@@ -72,8 +97,12 @@ def test_validation():
     assert c.post("/api/sessions", files={"file": ("x.txt", b"no es una imagen", "text/plain")}).status_code == 415
     ok = c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"})
     assert ok.status_code == 200
-    assert c.post(f"/api/sessions/{sid}/bin", json={"components": [9]}).status_code == 422
-    assert c.post(f"/api/sessions/{sid}/bin", json={"magnet_diameter_mm": 20}).status_code == 422
+    assert c.post(f"/api/sessions/{sid}/design/init", json={"components": [9]}).status_code == 422
+    sh = {"id": "a", "comp": 0}
+    assert c.put(f"/api/sessions/{sid}/design", json={"settings": {"magnet_diameter_mm": 20}, "shapes": [sh]}).status_code == 422
+    assert c.put(f"/api/sessions/{sid}/design", json={"shapes": [sh, sh]}).status_code == 422       # ids repetidos
+    assert c.put(f"/api/sessions/{sid}/design", json={"shapes": [{"id": "a", "comp": 99}]}).status_code == 422
+    assert c.put(f"/api/sessions/{sid}/design", json={"shapes": []}).status_code == 422
 
 
 def test_basic_auth(monkeypatch):
