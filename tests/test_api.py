@@ -210,3 +210,21 @@ def test_printability_checks():
     from shapely.geometry import Polygon  # noqa: F401
     m = c.put(f"/api/sessions/{sid}/design", json=des).json()
     assert isinstance(m["checks"], list)
+
+
+def test_partial_cell_row_orientation():
+    """La fila 0 del editor 2D (Y abajo) es el borde superior: apagar 'i,0' quita la parte de y<0 en pantalla."""
+    import io
+    st = _session()
+    sid = st["id"]
+    c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"})
+    des = c.post(f"/api/sessions/{sid}/design/init", json={"components": [0]}).json()
+    des["shapes"][0].update(x=0, y=0, rot=0)
+    des["settings"].update(auto_size=False, grid_width=3, grid_depth=5, partial=True, cells_off=["1,4"], stacking_lip=False)
+    r = c.put(f"/api/sessions/{sid}/design", json=des)
+    assert r.status_code == 200, r.text
+    m = trimesh.load(io.BytesIO(c.get(f"/api/sessions/{sid}/bin.stl").content), file_type="stl")
+    # editor: fila 4 = abajo = Y mundo negativa (el 3D invierte Y). Falta la muesca en la celda central de ese borde
+    ymin = m.bounds[0][1]
+    low = m.vertices[m.vertices[:, 1] < ymin + 5]
+    assert low[:, 0].min() > 10 or low[:, 0].max() < -10 or (low[:, 0] > 21).any() and (low[:, 0] < -21).any() and not ((low[:, 0] > -20) & (low[:, 0] < 20) & (low[:, 2] > 8)).any()

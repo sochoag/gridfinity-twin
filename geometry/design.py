@@ -304,7 +304,8 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
         S["auto_size"] = False                      # las celdas se numeran desde la esquina: la rejilla debe ser fija
 
     def _cells(nw_, nd_):
-        return {(i, j) for i in range(nw_) for j in range(nd_) if (i, j) not in cells_off} if partial else None
+        # cells_off usa la fila del editor 2D (Y hacia abajo); el bin se construye con Y invertida
+        return {(i, j) for i in range(nw_) for j in range(nd_) if (i, nd_ - 1 - j) not in cells_off} if partial else None
 
     def inner_zone(nw_, nd_):
         if partial:
