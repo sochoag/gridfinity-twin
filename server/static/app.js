@@ -314,9 +314,69 @@ $('btn-other').addEventListener('click', () => go('home'));
 /* ------------------------------------------------------------------ paso 3: silueta */
 $('simp').addEventListener('input', () => { $('simp-out').textContent = (+$('simp').value).toFixed(2); });
 $('btn-retrace').addEventListener('click', async () => {
+  if ((S.st.mask_edits || []).length) { await sendEdits(S.st.mask_edits); return; }   // conserva las ediciones manuales
   const ok = await trace({ simplification_mm: +$('simp').value, keep_holes: $('keep-holes-trace').checked });
-  if (ok) renderShape();
+  if (ok) { S.st.mask_edits = []; renderShape(); }
 });
+
+/* ---- edicion manual de la silueta: pincel / borrador / lazo sobre la mascara automatica */
+const MT = { tool: 'select', size: 6, cur: null };
+async function sendEdits(edits) {
+  const st = S.st;
+  try {
+    const res = await busy('Aplicando…', () => api(`/api/sessions/${st.id}/mask`, { method: 'POST', headers: JSON_HDR, body: JSON.stringify({ edits, simplification_mm: +$('simp').value, keep_holes: $('keep-holes-trace').checked }) }));
+    if (!res || S.st !== st) return false;
+    st.contours = res.contours; st.mask_edits = res.edits;
+    st.bin_meta = null; st.design = null;
+    S.rectStamp = S.rectStamp || st.created;
+    S.sel = new Set(res.contours.components.map((k) => k.id));
+    renderShape();
+    return true;
+  } catch (e) { toast(e.message, true); renderShape(); return false; }
+}
+function setMTool(t) {
+  MT.tool = t;
+  document.querySelectorAll('#brush-bar [data-mt]').forEach((b) => b.classList.toggle('on', b.dataset.mt === t));
+  $('shape-svg').classList.toggle('brushing', t !== 'select');
+  $('brush-size-l').classList.toggle('hidden', t.startsWith('lasso') || t === 'select');
+}
+document.querySelectorAll('#brush-bar [data-mt]').forEach((b) => b.addEventListener('click', () => setMTool(b.dataset.mt)));
+$('brush-size').addEventListener('input', () => { MT.size = +$('brush-size').value; $('brush-size-o').textContent = MT.size; });
+$('brush-undo').addEventListener('click', () => { const e = (S.st.mask_edits || []).slice(0, -1); sendEdits(e); });
+$('brush-clear').addEventListener('click', () => sendEdits([]));
+(() => {
+  const svg = $('shape-svg');
+  svg.addEventListener('pointerdown', (e) => {
+    if (MT.tool === 'select' || e.button !== 0) return;
+    e.preventDefault();
+    svg.setPointerCapture(e.pointerId);
+    const p = svgPoint(svg, e);
+    const lasso = MT.tool.startsWith('lasso');
+    const op = MT.tool.endsWith('erase') ? 'erase' : 'add';
+    const el = svgEl(lasso ? 'polygon' : 'polyline', { class: `stroke-prev ${op}`, points: `${p.x},${p.y}`, 'stroke-width': lasso ? 0.6 : MT.size * 2 });
+    svg.append(el);
+    MT.cur = { op, kind: lasso ? 'lasso' : 'brush', r: MT.size, pts: [[r2(p.x), r2(p.y)]], el };
+  });
+  svg.addEventListener('pointermove', (e) => {
+    const c = MT.cur;
+    if (!c) return;
+    const p = svgPoint(svg, e), l = c.pts[c.pts.length - 1];
+    if (Math.hypot(p.x - l[0], p.y - l[1]) < (c.kind === 'lasso' ? 1.2 : Math.max(0.6, c.r * 0.18))) return;
+    c.pts.push([r2(p.x), r2(p.y)]);
+    c.el.setAttribute('points', c.pts.map((q) => q.join(',')).join(' '));
+  });
+  const end = async () => {
+    const c = MT.cur;
+    if (!c) return;
+    MT.cur = null;
+    c.el.remove();
+    if (c.kind === 'lasso' && c.pts.length < 3) return;
+    const edit = { op: c.op, kind: c.kind, r: c.r, pts: c.pts.slice(0, 4000) };
+    await sendEdits([...(S.st.mask_edits || []), edit]);
+  };
+  svg.addEventListener('pointerup', end);
+  svg.addEventListener('pointercancel', end);
+})();
 $('btn-back-paper').addEventListener('click', () => go('corners'));
 $('btn-to-bin').addEventListener('click', () => {
   if (!S.sel.size) return toast('Selecciona al menos un objeto', true);
@@ -359,6 +419,11 @@ function renderShape() {
     li.addEventListener('click', (e) => { if (e.target.tagName !== 'INPUT') toggleComp(k.id); else toggleComp(k.id); });
     list.append(li);
   }
+  for (const e of st.mask_edits || []) {   // ediciones manuales ya aplicadas (tenues)
+    svg.append(svgEl(e.kind === 'lasso' ? 'polygon' : 'polyline', { class: `stroke-done ${e.op}`, points: e.pts.map((q) => q.join(',')).join(' '), 'stroke-width': e.kind === 'lasso' ? 0.5 : e.r * 2 }));
+  }
+  $('brush-undo').disabled = $('brush-clear').disabled = !(st.mask_edits || []).length;
+  setMTool(MT.tool);
   paintSelection();
 }
 

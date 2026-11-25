@@ -75,7 +75,7 @@
           </select>
         </label>
         <div id="measure-box" class="hidden">
-          <p class="note">Arrastra los dos marcadores hasta los extremos de algo cuya medida conozcas (tarjeta, moneda, regla) y escribe la distancia real. Supone la foto tomada de frente: el papel/tarjeta no hace falta.</p>
+          <p class="note">Arrastra los dos marcadores hasta los extremos de algo cuya medida conozcas (tarjeta, moneda, regla) y escribe la distancia real. Supone la foto tomada de frente y que los bordes de la foto son fondo liso (sin papel ni otros objetos): así no hace falta la hoja.</p>
           <label>Referencia
             <select id="meas-preset">
               <option value="">— medida libre —</option>
@@ -108,7 +108,18 @@
     <div class="layout">
       <div class="stage">
         <svg id="shape-svg" class="canvas" preserveAspectRatio="xMidYMid meet"></svg>
-        <p class="hint">Haz clic en un objeto para incluirlo o excluirlo del bin.</p>
+        <div class="toolbar brushbar" id="brush-bar" aria-label="Edición manual de la silueta">
+          <button data-mt="select" class="on" title="Clic en un objeto para incluirlo o excluirlo">☝ Seleccionar</button>
+          <button data-mt="add" title="Pincel: añade zonas a la silueta">🖌 Pincel +</button>
+          <button data-mt="erase" title="Borrador: quita zonas de la silueta">⌫ Borrador</button>
+          <button data-mt="lasso-add" title="Lazo: dibuja una zona a rellenar">◌ Lazo +</button>
+          <button data-mt="lasso-erase" title="Lazo: dibuja una zona a borrar">◌ Lazo −</button>
+          <label class="inline" id="brush-size-l">Tamaño <input type="range" id="brush-size" min="1" max="30" step="0.5" value="6"> <output id="brush-size-o">6</output> mm</label>
+          <span class="grow"></span>
+          <button id="brush-undo" title="Deshacer la última pincelada" disabled>↶ Deshacer trazo</button>
+          <button id="brush-clear" title="Volver a la detección automática" disabled>Restaurar</button>
+        </div>
+        <p class="hint" id="shape-hint">Haz clic en un objeto para incluirlo o excluirlo del bin. Con el pincel o el lazo corriges lo que la detección automática no vio bien.</p>
       </div>
       <aside class="panel">
         <h2>Shape settings</h2>

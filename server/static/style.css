@@ -270,3 +270,16 @@ label.sw > input:focus-visible + i { outline: 2px solid var(--accent); outline-o
 .mn-canvas.draw { cursor: crosshair; height: 300px; }
 label.inline { display: inline-flex; align-items: center; gap: 8px; margin: 6px 0 10px; font-size: 13px; }
 label.inline input { width: 80px; }
+
+.brushbar { margin-top: 10px; padding-top: 10px; gap: 6px; }
+.brushbar button { padding: 6px 12px; font-size: 13px; }
+.brushbar button.on { border-color: var(--accent); color: var(--accent); background: #fff6f0; }
+#shape-svg.brushing { cursor: crosshair; touch-action: none; }
+#shape-svg.brushing .comp, #shape-svg.brushing .comp-label { pointer-events: none; }
+.stroke-prev, .stroke-done { fill: none; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.stroke-prev.add, .stroke-done.add { stroke: #2f9e5b; fill: rgba(47,158,91,.18); }
+.stroke-prev.erase, .stroke-done.erase { stroke: #d6334a; fill: rgba(214,51,74,.15); }
+.stroke-done { stroke-opacity: .16; fill-opacity: 0; }
+polygon.stroke-done { stroke-width: 0.5; stroke-opacity: .5; }
+polyline.stroke-prev { fill: none; stroke-opacity: .38; }
+polyline.stroke-done { fill: none; }

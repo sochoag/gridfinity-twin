@@ -280,3 +280,38 @@ def test_vector_import_svg_dxf():
     assert r.status_code == 200 and len(r.json()["shapes"]) == 2, r.text   # polilinea + cadena de lineas/arco cerrada por polygonize
     assert c.post("/api/vector/parse", files={"file": ("x.txt", b"hola", "text/plain")}).status_code == 422
     assert c.post("/api/vector/parse", files={"file": ("e.svg", b'<svg xmlns="http://www.w3.org/2000/svg"><line x1="0" y1="0" x2="5" y2="5" stroke="black"/></svg>', "image/svg+xml")}).status_code == 422
+
+
+def test_manual_mask_edit():
+    st = _session()
+    sid = st["id"]
+    c0 = c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"}).json()
+    n0 = len(c0["components"])
+    # sin ediciones = mismo resultado que el automatico
+    r = c.post(f"/api/sessions/{sid}/mask", json={"edits": []})
+    assert r.status_code == 200 and len(r.json()["contours"]["components"]) == n0
+    # pincel 'add' lejos de todo objeto (esquina libre del papel): aparece un objeto nuevo grande
+    pw, ph = c0["paper"]["width_mm"], c0["paper"]["height_mm"]
+    free = None
+    for gx in range(12, int(pw) - 12, 4):
+        for gy in range(12, int(ph) - 12, 4):
+            if all(not (k["bbox"]["x"] - 14 < gx < k["bbox"]["x"] + k["bbox"]["width"] + 14 and k["bbox"]["y"] - 14 < gy < k["bbox"]["y"] + k["bbox"]["height"] + 14) for k in c0["components"]):
+                free = (gx, gy)
+                break
+        if free:
+            break
+    assert free, "sin zona libre para probar"
+    stroke = {"op": "add", "kind": "brush", "r": 5, "pts": [[free[0] - 6, free[1]], [free[0] + 6, free[1]]]}
+    r = c.post(f"/api/sessions/{sid}/mask", json={"edits": [stroke]})
+    assert r.status_code == 200 and len(r.json()["contours"]["components"]) == n0 + 1
+    assert c.get(f"/api/sessions/{sid}").json()["mask_edits"][0]["op"] == "add"
+    # borrar un objeto entero con un lazo
+    k = c0["components"][0]["bbox"]
+    box = [[k["x"] - 3, k["y"] - 3], [k["x"] + k["width"] + 3, k["y"] - 3], [k["x"] + k["width"] + 3, k["y"] + k["height"] + 3], [k["x"] - 3, k["y"] + k["height"] + 3]]
+    r = c.post(f"/api/sessions/{sid}/mask", json={"edits": [{"op": "erase", "kind": "lasso", "pts": box}]})
+    assert r.status_code == 200 and len(r.json()["contours"]["components"]) <= n0 - 1 + 1
+    # borrar todo -> error claro; un nuevo trazado limpia las ediciones
+    whole = [[-10, -10], [pw + 10, -10], [pw + 10, ph + 10], [-10, ph + 10]]
+    assert c.post(f"/api/sessions/{sid}/mask", json={"edits": [{"op": "erase", "kind": "lasso", "pts": whole}]}).status_code == 422
+    c.post(f"/api/sessions/{sid}/trace", json={"corners": st["corners"], "paper": "A4"})
+    assert c.get(f"/api/sessions/{sid}").json()["mask_edits"] == []

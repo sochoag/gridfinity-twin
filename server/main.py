@@ -310,6 +310,8 @@ def trace(sid: str, body: TraceParams):
     if not r.outer:
         raise HTTPException(422, "no se detecto ningun objeto sobre el papel")
     cv2.imwrite(str(d / "rectified.jpg"), r.rectified, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    cv2.imwrite(str(d / "mask_auto.png"), r.mask)      # mascara automatica: base para las ediciones manuales
+    st["mask_edits"] = []
     st["corners"] = pts.round(1).tolist()
     st["paper"] = {"name": body.paper.upper() if body.paper.upper() in P.PAPERS else "custom",
                    "width_mm": r.paper_mm[0], "height_mm": r.paper_mm[1]}
@@ -318,6 +320,45 @@ def trace(sid: str, body: TraceParams):
     st["design"] = None
     write_state(d, st)
     return st["contours"]
+
+
+class MaskEdit(BaseModel):
+    op: Literal["add", "erase"]
+    kind: Literal["brush", "lasso"] = "brush"
+    r: float = Field(5.0, ge=0.5, le=80)
+    pts: list[list[float]] = Field(..., min_length=1, max_length=4000)
+
+
+class MaskParams(BaseModel):
+    edits: list[MaskEdit] = Field(default_factory=list, max_length=400)
+    simplification_mm: float = Field(0.35, ge=0.05, le=2.0)
+    keep_holes: bool = True
+
+
+@app.post("/api/sessions/{sid}/mask")
+def mask_edit(sid: str, body: MaskParams):
+    """Recalcula los contornos aplicando pinceladas / lazos sobre la mascara automatica."""
+    d = sdir(sid)
+    st = read_state(d)
+    f = d / "mask_auto.png"
+    if not st.get("contours") or not f.exists():
+        raise HTTPException(409, "vuelve a trazar la silueta para poder editarla a mano")
+    auto = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+    pw, ph = st["contours"]["paper"]["width_mm"], st["contours"]["paper"]["height_mm"]
+    edits = [e.model_dump() for e in body.edits]
+    for e in edits:
+        e["pts"] = [[min(max(x, -50.0), pw + 50.0), min(max(y, -50.0), ph + 50.0)] for x, y in e["pts"]]
+    mask = P.apply_edits(auto, edits)
+    outer, holes = P.extract_contours(mask, eps_mm=body.simplification_mm, keep_holes=body.keep_holes)
+    if not outer:
+        raise HTTPException(422, "con esas ediciones no queda ningun objeto")
+    res = P.sort_components(P.Result((pw, ph), np.zeros((4, 2), np.float32), np.zeros((1, 1, 3), np.uint8), mask, outer, holes))
+    st["contours"] = contours_payload(res)
+    st["mask_edits"] = edits
+    st["bin_meta"] = None
+    st["design"] = None
+    write_state(d, st)
+    return {"contours": st["contours"], "edits": edits}
 
 
 _LOCKS: dict[str, threading.Lock] = {}

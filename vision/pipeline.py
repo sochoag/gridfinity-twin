@@ -183,6 +183,28 @@ def segment(rect: np.ndarray, margin_mm: float = 8.0) -> np.ndarray:
     return out
 
 
+def apply_edits(mask: np.ndarray, edits: list) -> np.ndarray:
+    """Aplica pinceladas/lazos manuales (en mm sobre la rectificada) a la mascara automatica."""
+    out = mask.copy()
+    H, W = out.shape[:2]
+    for e in edits:
+        val = 255 if e["op"] == "add" else 0
+        pts = np.array([[x * PX_PER_MM, y * PX_PER_MM] for x, y in e["pts"]], np.float32)
+        if len(pts) == 0:
+            continue
+        ip = np.round(pts).astype(np.int32)
+        if e.get("kind", "brush") == "lasso":
+            if len(ip) >= 3:
+                cv2.fillPoly(out, [ip.reshape(-1, 1, 2)], val)
+        else:
+            r = max(1, int(round(e.get("r", 5.0) * PX_PER_MM)))
+            if len(ip) > 1:
+                cv2.polylines(out, [ip.reshape(-1, 1, 2)], False, val, thickness=2 * r, lineType=cv2.LINE_8)
+            for x, y in ip:
+                cv2.circle(out, (int(x), int(y)), r, val, -1)
+    return out
+
+
 def extract_contours(mask, eps_mm=0.35, min_area_mm2=150.0, keep_holes=True):
     cnts, hier = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
     outer, holes = [], []
