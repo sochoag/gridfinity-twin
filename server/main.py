@@ -399,27 +399,30 @@ def design_build(sid: str, body: DesignIn):
         r = build_design(comps, shapes, S)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(422, f"no se pudo generar el bin: {e}")
-    with _LOCKS.setdefault(sid, threading.Lock()):
-        chk = export_stl(r.bin, str(d / "bin.tmp.stl"))
-        _swap(d / "bin.tmp.stl", d / "bin.stl")
-        if not chk["watertight"]:
-            r.warnings.append("la malla exportada no es cerrada: revisa los parametros o repara el STL en tu slicer")
-        ichk = None
-        ins = d / "insert.stl"
-        if r.insert is not None:
-            ichk = export_stl(r.insert, str(d / "insert.tmp.stl"))
-            _swap(d / "insert.tmp.stl", ins)
-        elif ins.exists():
-            ins.unlink()
-        lchk = None
-        lid = d / "lid.stl"
-        if r.lid is not None:
-            lchk = export_stl(r.lid, str(d / "lid.tmp.stl"))
-            _swap(d / "lid.tmp.stl", lid)
-            if not lchk["watertight"]:
-                r.warnings.append("la malla de la tapa no es cerrada: revisa los parametros o repara el STL en tu slicer")
-        elif lid.exists():
-            lid.unlink()
+    try:
+        with _LOCKS.setdefault(sid, threading.Lock()):
+            chk = export_stl(r.bin, str(d / "bin.tmp.stl"))
+            _swap(d / "bin.tmp.stl", d / "bin.stl")
+            if not chk["watertight"]:
+                r.warnings.append("la malla exportada no es cerrada: revisa los parametros o repara el STL en tu slicer")
+            ichk = None
+            ins = d / "insert.stl"
+            if r.insert is not None:
+                ichk = export_stl(r.insert, str(d / "insert.tmp.stl"))
+                _swap(d / "insert.tmp.stl", ins)
+            elif ins.exists():
+                ins.unlink()
+            lchk = None
+            lid = d / "lid.stl"
+            if r.lid is not None:
+                lchk = export_stl(r.lid, str(d / "lid.tmp.stl"))
+                _swap(d / "lid.tmp.stl", lid)
+                if not lchk["watertight"]:
+                    r.warnings.append("la malla de la tapa no es cerrada: revisa los parametros o repara el STL en tu slicer")
+            elif lid.exists():
+                lid.unlink()
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     pockets_to_svg(r.pockets, str(d / "bin.svg"))
     meta = {"grid": list(r.grid), "size_mm": [round(r.size_mm[0], 1), round(r.size_mm[1], 1)],
             "total_height_mm": round(r.total_height_mm, 1), "warnings": r.warnings, "problems": r.problems,

@@ -346,6 +346,11 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
     if S["stacking_lip"]:
         solid = solid + lip_ring(W, D, H)
         total_h = H + LIP_H
+    if solid.is_empty():
+        raise ValueError("el bin quedo vacio: reduce el grosor de pared / costilla o aumenta la rejilla")
+    if lid is not None and lid.is_empty():
+        lid = None
+        warns.append("la tapa quedo vacia (la zona es demasiado estrecha): ajusta asiento o holgura")
     insert = Manifold.batch_boolean([m for m in inserts if m is not None], 0) if inserts else None
 
     return DesignResult(solid, insert, (nw, nd), (W, D), total_h, pockets_all, warns,

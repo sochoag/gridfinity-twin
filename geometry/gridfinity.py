@@ -247,6 +247,8 @@ def to_trimesh(m: Manifold):
 def _check(path: str) -> tuple:
     import trimesh
     chk = trimesh.load(path, file_type="stl")
+    if not isinstance(chk, trimesh.Trimesh) or len(chk.faces) == 0:   # STL vacio: trimesh devuelve una Scene
+        raise ValueError("el modelo resultante esta vacio (revisa ajustes: pared, rejilla o profundidad)")
     return chk, {"watertight": bool(chk.is_watertight), "degenerate_faces": int((chk.area_faces < 1e-12).sum()),
                  "volume_cm3": round(float(chk.volume) / 1000, 2) if chk.is_watertight else None}
 
@@ -262,17 +264,20 @@ def export_stl(m: Manifold, path: str) -> dict:
         return res
     import trimesh
     for _ in range(2):
-        chk.update_faces(chk.nondegenerate_faces())
-        chk.merge_vertices()
-        trimesh.repair.fill_holes(chk)
-        trimesh.repair.fix_normals(chk)
-        chk.export(path)
-        chk, res2 = _check(path)
+        try:
+            chk.update_faces(chk.nondegenerate_faces())
+            chk.merge_vertices()
+            trimesh.repair.fill_holes(chk)   # necesita networkx
+            trimesh.repair.fix_normals(chk)
+            chk.export(path)
+            chk, res2 = _check(path)
+        except Exception:  # noqa: BLE001  la reparacion es opcional: nunca debe tumbar la generacion
+            break
         if res2["watertight"] and res2["degenerate_faces"] == 0:
             res2["repaired"] = True
             return res2
-    res2["repaired"] = False
-    return res2
+    res["repaired"] = False
+    return res
 
 
 def pockets_to_svg(pockets, path, margin=5.0):
