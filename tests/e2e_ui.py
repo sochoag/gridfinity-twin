@@ -80,6 +80,7 @@ try:
         pg.wait_for_function("window.__twin.st.mask_edits && window.__twin.st.mask_edits.length === 1", timeout=20000)
         pg.wait_for_selector("#shape-svg .comp")
         check("pincelada aplicada: sigue habiendo 4 objetos y se puede deshacer", pg.locator("#shape-svg .comp").count() == 4 and not pg.is_disabled("#brush-undo") and not pg.is_disabled("#brush-clear"))
+        check("pincel inteligente activo por defecto y registrado en la edicion", pg.is_visible("#brush-smart-l") and pg.evaluate("window.__twin.st.mask_edits[0].smart === true"))
         pg.click("#brush-undo")
         pg.wait_for_function("window.__twin.st.mask_edits && window.__twin.st.mask_edits.length === 0", timeout=20000)
         check("deshacer trazo deja 0 ediciones", pg.is_disabled("#brush-undo") and pg.locator("#shape-svg .comp").count() == 4)

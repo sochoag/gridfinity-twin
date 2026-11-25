@@ -482,3 +482,28 @@ def test_dividers_interlock():
     assert sum((a ^ b).volume() for a in xs for b in ys) < 1e-6          # encajan sin interferir
     raw = Manifold.cube((100, 20, 1.2))
     assert (stand(raw, "x", -20) ^ stand(raw, "y", 0)).volume() > 10     # sin muescas chocarian
+
+
+def test_smart_brush():
+    """El pincel inteligente solo cambia pixeles de color parecido al del centro del trazo."""
+    import cv2
+    from vision import pipeline as P
+    px = P.PX_PER_MM
+    rect = np.full((400, 600, 3), (235, 225, 215), np.uint8)             # papel claro
+    cv2.rectangle(rect, (200, 100), (400, 300), (40, 40, 160), -1)       # objeto rojo oscuro
+    cv2.rectangle(rect, (400, 100), (440, 300), (170, 170, 170), -1)     # halo de sombra gris pegado
+    mask = np.zeros(rect.shape[:2], np.uint8)
+    mask[100:300, 200:440] = 255                                          # mascara incluye el halo
+    mm = lambda v: v / px
+    # borrador inteligente sobre el halo: quita el halo, respeta el objeto aunque la huella lo toque
+    e = {"op": "erase", "kind": "brush", "r": mm(30), "smart": True, "tol": 14, "pts": [[mm(420), mm(200)]]}
+    out = P.apply_edits(mask, [e], rect)
+    assert out[200, 420] == 0 and out[200, 300] == 255
+    # el mismo trazo sin smart borra tambien parte del objeto
+    out2 = P.apply_edits(mask, [{**e, "smart": False}], rect)
+    assert out2[200, 395] == 0
+    # pincel inteligente sobre el objeto: extiende por el color parecido, no por el papel
+    m2 = np.zeros_like(mask); m2[100:300, 200:380] = 255
+    e2 = {"op": "add", "kind": "brush", "r": mm(30), "smart": True, "tol": 14, "pts": [[mm(370), mm(200)]]}
+    o3 = P.apply_edits(m2, [e2], rect)
+    assert o3[200, 395] == 255 and o3[200, 420] == 0

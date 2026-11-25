@@ -336,6 +336,8 @@ class MaskEdit(BaseModel):
     op: Literal["add", "erase"]
     kind: Literal["brush", "lasso"] = "brush"
     r: float = Field(5.0, ge=0.5, le=80)
+    smart: bool = False                       # pincel inteligente: solo cambia pixeles de color parecido al del centro del trazo
+    tol: float = Field(14.0, ge=2, le=60)
     pts: list[list[float]] = Field(..., min_length=1, max_length=4000)
 
 
@@ -358,7 +360,9 @@ def mask_edit(sid: str, body: MaskParams):
     edits = [e.model_dump() for e in body.edits]
     for e in edits:
         e["pts"] = [[min(max(x, -50.0), pw + 50.0), min(max(y, -50.0), ph + 50.0)] for x, y in e["pts"]]
-    mask = P.apply_edits(auto, edits)
+    rf = d / "rectified.jpg"
+    rect = cv2.imread(str(rf)) if rf.exists() else None
+    mask = P.apply_edits(auto, edits, rect)
     outer, holes = P.extract_contours(mask, eps_mm=body.simplification_mm, keep_holes=body.keep_holes)
     if not outer:
         raise HTTPException(422, "con esas ediciones no queda ningun objeto")

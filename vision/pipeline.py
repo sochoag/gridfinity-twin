@@ -289,10 +289,42 @@ def segment(rect: np.ndarray, margin_mm: float = 8.0) -> np.ndarray:
     return out
 
 
-def apply_edits(mask: np.ndarray, edits: list) -> np.ndarray:
-    """Aplica pinceladas/lazos manuales (en mm sobre la rectificada) a la mascara automatica."""
+def _smart_region(rect_lab, footprint, seeds, tol):
+    """Region growing por color dentro de la huella del pincel: pixeles de la huella cuyo color (Lab) se
+    parece al de la semilla (centro del trazo) y que estan conectados a ella."""
+    ys, xs = np.nonzero(seeds)
+    if len(ys) == 0:
+        return footprint > 0
+    if len(ys) > 300:
+        sel = np.random.default_rng(0).choice(len(ys), 300, replace=False)
+        ys, xs = ys[sel], xs[sel]
+    sc = rect_lab[ys, xs] * np.array([0.5, 1.0, 1.0], np.float32)             # L pesa menos: sombras ~ mismo color
+    med = np.median(sc, axis=0)
+    dm = np.linalg.norm(sc - med, axis=1)
+    sc = sc[dm <= np.percentile(dm, 90)]                                        # descarta semillas atipicas
+    spread = float(np.std(np.linalg.norm(sc - np.median(sc, axis=0), axis=1)))
+    thr = tol + 1.5 * spread
+    fy, fx = np.nonzero(footprint)
+    px = rect_lab[fy, fx] * np.array([0.5, 1.0, 1.0], np.float32)
+    dist = np.empty(len(fy), np.float32)
+    for i in range(0, len(fy), 4000):                                           # distancia al color semilla mas cercano
+        dist[i:i + 4000] = np.sqrt(((px[i:i + 4000, None, :] - sc[None, :, :]) ** 2).sum(-1)).min(1)
+    cand = np.zeros(footprint.shape, np.uint8)
+    cand[fy, fx] = (dist < thr).astype(np.uint8)
+    cand = cv2.bitwise_or(cand, cv2.bitwise_and(seeds, footprint))
+    n, lbl = cv2.connectedComponents(cand, connectivity=8)
+    keep = np.unique(lbl[(seeds > 0) & (cand > 0)])
+    reg = np.isin(lbl, keep[keep > 0]).astype(np.uint8)
+    reg = cv2.morphologyEx(reg, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    return cv2.bitwise_and(reg, footprint) > 0
+
+
+def apply_edits(mask: np.ndarray, edits: list, rect: np.ndarray | None = None) -> np.ndarray:
+    """Aplica pinceladas/lazos manuales (en mm sobre la rectificada) a la mascara automatica.
+    Los trazos 'smart' (pincel) solo cambian los pixeles de la huella con color parecido al del centro del trazo."""
     out = mask.copy()
     H, W = out.shape[:2]
+    rect_lab = cv2.cvtColor(cv2.GaussianBlur(rect, (5, 5), 0), cv2.COLOR_BGR2LAB).astype(np.float32) if rect is not None and rect.shape[:2] == out.shape[:2] else None
     for e in edits:
         val = 255 if e["op"] == "add" else 0
         pts = np.array([[x * PX_PER_MM, y * PX_PER_MM] for x, y in e["pts"]], np.float32)
@@ -302,12 +334,25 @@ def apply_edits(mask: np.ndarray, edits: list) -> np.ndarray:
         if e.get("kind", "brush") == "lasso":
             if len(ip) >= 3:
                 cv2.fillPoly(out, [ip.reshape(-1, 1, 2)], val)
-        else:
-            r = max(1, int(round(e.get("r", 5.0) * PX_PER_MM)))
+            continue
+        r = max(1, int(round(e.get("r", 5.0) * PX_PER_MM)))
+        if e.get("smart") and rect_lab is not None:
+            foot = np.zeros(out.shape, np.uint8)
+            seed = np.zeros(out.shape, np.uint8)
+            rs = max(2, int(round(r * 0.3)))
             if len(ip) > 1:
-                cv2.polylines(out, [ip.reshape(-1, 1, 2)], False, val, thickness=2 * r, lineType=cv2.LINE_8)
+                cv2.polylines(foot, [ip.reshape(-1, 1, 2)], False, 1, thickness=2 * r, lineType=cv2.LINE_8)
+                cv2.polylines(seed, [ip.reshape(-1, 1, 2)], False, 1, thickness=2 * rs, lineType=cv2.LINE_8)
             for x, y in ip:
-                cv2.circle(out, (int(x), int(y)), r, val, -1)
+                cv2.circle(foot, (int(x), int(y)), r, 1, -1)
+                cv2.circle(seed, (int(x), int(y)), rs, 1, -1)
+            reg = _smart_region(rect_lab, foot, seed, float(e.get("tol", 14.0)))
+            out[reg] = val
+            continue
+        if len(ip) > 1:
+            cv2.polylines(out, [ip.reshape(-1, 1, 2)], False, val, thickness=2 * r, lineType=cv2.LINE_8)
+        for x, y in ip:
+            cv2.circle(out, (int(x), int(y)), r, val, -1)
     return out
 
 

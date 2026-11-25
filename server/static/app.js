@@ -340,7 +340,15 @@ function setMTool(t) {
   document.querySelectorAll('#brush-bar [data-mt]').forEach((b) => b.classList.toggle('on', b.dataset.mt === t));
   $('shape-svg').classList.toggle('brushing', t !== 'select');
   $('brush-size-l').classList.toggle('hidden', t.startsWith('lasso') || t === 'select');
+  syncSmartUI();
 }
+function syncSmartUI() {
+  const brush = MT.tool === 'add' || MT.tool === 'erase';
+  $('brush-smart-l').classList.toggle('hidden', !brush);
+  $('brush-tol-l').classList.toggle('hidden', !brush || !$('brush-smart').checked);
+}
+$('brush-smart').addEventListener('change', syncSmartUI);
+syncSmartUI();
 document.querySelectorAll('#brush-bar [data-mt]').forEach((b) => b.addEventListener('click', () => setMTool(b.dataset.mt)));
 $('brush-size').addEventListener('input', () => { MT.size = +$('brush-size').value; $('brush-size-o').textContent = MT.size; });
 $('brush-undo').addEventListener('click', () => { const e = (S.st.mask_edits || []).slice(0, -1); sendEdits(e); });
@@ -373,6 +381,7 @@ $('brush-clear').addEventListener('click', () => sendEdits([]));
     c.el.remove();
     if (c.kind === 'lasso' && c.pts.length < 3) return;
     const edit = { op: c.op, kind: c.kind, r: c.r, pts: c.pts.slice(0, 4000) };
+    if (c.kind === 'brush' && $('brush-smart').checked) { edit.smart = true; edit.tol = +$('brush-tol').value; }
     await sendEdits([...(S.st.mask_edits || []), edit]);
   };
   svg.addEventListener('pointerup', end);
