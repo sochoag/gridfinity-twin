@@ -39,7 +39,7 @@ def test_full_flow():
     assert cont["paper"] == {"width_mm": 297.0, "height_mm": 210.0}
     xs = [min(p[0] for p in k["outer"]) for k in cont["components"]]
     assert xs == sorted(xs)                       # orden izquierda -> derecha
-    assert any(k["holes"] for k in cont["components"])
+    assert not any(k["holes"] for k in cont["components"])      # la ranura de la cuchilla (con deslizador) se rellena: no es un hueco real
 
     assert c.get(f"/api/sessions/{sid}/rectified.jpg").status_code == 200
     # diseno: init -> editar -> construir

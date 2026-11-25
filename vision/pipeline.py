@@ -30,10 +30,13 @@ class Result:
 
 
 def order_corners(pts: np.ndarray) -> np.ndarray:
+    """TL, TR, BR, BL (sentido horario en pantalla). Robusto a hojas giradas: ordena por angulo
+    alrededor del centro y arranca en la esquina mas cercana a la arriba-izquierda."""
     pts = pts.astype(np.float32)
-    s = pts.sum(1)
-    d = np.diff(pts, axis=1).ravel()
-    return np.array([pts[s.argmin()], pts[d.argmin()], pts[s.argmax()], pts[d.argmax()]], np.float32)
+    c = pts.mean(0)
+    pts = pts[np.argsort(np.arctan2(pts[:, 1] - c[1], pts[:, 0] - c[0]))]      # horario con Y hacia abajo
+    start = int(np.argmin(pts.sum(1)))
+    return np.roll(pts, -start, axis=0).astype(np.float32)
 
 
 def _line_intersect(l1, l2):
@@ -74,7 +77,7 @@ def _fit_edge(pts, p0, p1, band):
     return cv2.fitLine(sel, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
 
 
-def detect_paper(img: np.ndarray) -> np.ndarray:
+def _detect_paper_legacy(img: np.ndarray) -> np.ndarray:
     """Esquinas de la hoja.
 
     Papel = region de croma bajo (neutra/azulada); la madera es calida (b alto).
@@ -107,6 +110,95 @@ def detect_paper(img: np.ndarray) -> np.ndarray:
         lines.append(ln)
     if lines is not None:
         quad = np.array([_line_intersect(lines[(i - 1) % 4], lines[i]) for i in range(4)], np.float32)
+    return order_corners(quad / scale)
+
+
+def _paper_candidates(small):
+    """Mascaras candidatas de papel. El papel es azulado/neutro y la madera calida: el croma 'calido'
+    (a + b respecto al gris) separa bien en cualquier luz, incluso con sombras (que solo cambian L)."""
+    lab = cv2.cvtColor(cv2.GaussianBlur(small, (7, 7), 0), cv2.COLOR_BGR2LAB).astype(np.float32)
+    warm = (lab[..., 1] - 128) + (lab[..., 2] - 128)
+    t_otsu, _ = cv2.threshold(np.clip((warm + 40) * 3, 0, 255).astype(np.uint8), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    t0 = float(np.clip(t_otsu / 3 - 40, -8, 8))
+    L = lab[..., 0]
+    g = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    mu = cv2.blur(g, (7, 7))
+    sd = np.sqrt(np.maximum(cv2.blur(g * g, (7, 7)) - mu * mu, 0))     # textura local: papel liso, madera con veta
+    smooth = cv2.dilate(((sd < 4.5) | ((sd < 7.0) & (warm < -22))).astype(np.uint8),   # sombra: mas ruido, pero croma claramente de papel
+                         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))) > 0
+    for lf in (0.55, 0.3):                                    # 2a pasada: tolera hojas con media sombra
+        for dt in (0, -5, 5, -10, 10):
+            m = warm < t0 + dt
+            if m.sum() > 500:
+                lp = np.percentile(L[m], 85)                  # luz tipica del papel en esta foto
+                m &= L > max(70.0 if lf > 0.5 else 45.0, lf * lp)   # descarta madera oscura / sombra de objetos grandes
+            yield (m & smooth).astype(np.uint8) * 255
+
+
+def _score_quad(contour, quad, shape):
+    h, w = shape[:2]
+    area = cv2.contourArea(contour)
+    qa = cv2.contourArea(quad.astype(np.float32))
+    if qa < 0.04 * h * w:
+        return -1.0
+    fill = area / (qa + 1e-9)                              # cuanto del cuadrilatero es papel
+    e = [np.linalg.norm(quad[(i + 1) % 4] - quad[i]) for i in range(4)]
+    long_, short_ = max((e[0] + e[2]) / 2, (e[1] + e[3]) / 2), min((e[0] + e[2]) / 2, (e[1] + e[3]) / 2)
+    ratio = long_ / (short_ + 1e-9)
+    asp = max(0.0, 1.0 - min(abs(ratio - 1.414), abs(ratio - 1.294)) / 0.45)    # A4 = 1.414, Letter = 1.294
+    # un cuadrilatero casi opuesto-paralelo (rectangulo en perspectiva suave)
+    v = [quad[(i + 1) % 4] - quad[i] for i in range(4)]
+    cosang = lambda a, b: abs(float(a @ b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+    par = 1.0 - 0.5 * (cosang(v[0], v[2]) < 0.9) - 0.5 * (cosang(v[1], v[3]) < 0.9)
+    touch = sum(1 for p in quad if p[0] < 2 or p[1] < 2 or p[0] > w - 3 or p[1] > h - 3)
+    return (fill ** 2) * (0.35 + 0.65 * asp) * (0.5 + 0.5 * par) * (qa / (h * w)) ** 0.25 * (0.85 ** touch)
+
+
+def detect_paper(img: np.ndarray) -> np.ndarray:
+    """Esquinas de la hoja (TL, TR, BR, BL) en la foto original.
+
+    1) mascaras candidatas por croma (umbral adaptativo + variantes), 2) componentes grandes con los
+    huecos de objetos rellenados, 3) se elige el cuadrilatero que mejor se parece a una hoja
+    (relleno, proporcion A4/Letter, lados paralelos), 4) cada borde se reajusta con una recta robusta
+    (Huber) para ignorar objetos o reflejos que muerden el borde y se intersectan las rectas."""
+    h, w = img.shape[:2]
+    scale = 800 / max(h, w)
+    small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    sh, sw = small.shape[:2]
+    k = max(3, int(round(9 * scale * 2)) | 1)
+    ell = lambda n: cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (n, n))
+    best, best_s, best_c = None, 0.0, None
+    for m in _paper_candidates(small):
+        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, ell(k))
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, ell(2 * k + 1))
+        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        for c in sorted(cnts, key=cv2.contourArea, reverse=True)[:4]:
+            if cv2.contourArea(c) < 0.04 * sh * sw:
+                continue
+            quad = _quad_from_contour(c)
+            sc = _score_quad(c, quad, small.shape)
+            if sc > best_s:
+                best, best_s, best_c = quad, sc, c
+    if best is None or best_s < 0.12:
+        return _detect_paper_legacy(img)
+    # refinar cada borde con una recta robusta sobre los puntos del contorno cercanos a el
+    pts = best_c.reshape(-1, 2).astype(np.float32)
+    band = 0.012 * max(sh, sw)
+    quad = order_corners(best)
+    lines = []
+    for i in range(4):
+        ln = _fit_edge(pts, quad[i], quad[(i + 1) % 4], band)
+        if ln is None:
+            lines = None
+            break
+        lines.append(ln)
+    if lines is not None:
+        try:
+            q2 = np.array([_line_intersect(lines[(i - 1) % 4], lines[i]) for i in range(4)], np.float32)
+            if cv2.contourArea(q2) > 0.8 * cv2.contourArea(quad) and cv2.contourArea(q2) < 1.2 * cv2.contourArea(quad):
+                quad = q2
+        except np.linalg.LinAlgError:
+            pass
     return order_corners(quad / scale)
 
 
@@ -144,7 +236,7 @@ def segment(rect: np.ndarray, margin_mm: float = 8.0) -> np.ndarray:
         plane[..., k] = (G @ coef.astype(np.float32)).reshape(H, W)
     d = lab - plane
     # pesos: luminosidad pesa menos (las sombras cambian L pero no el croma)
-    dist = np.sqrt((0.6 * d[..., 0]) ** 2 + d[..., 1] ** 2 + d[..., 2] ** 2)
+    dist = np.sqrt((0.4 * d[..., 0]) ** 2 + d[..., 1] ** 2 + d[..., 2] ** 2)
     dist8 = np.clip(dist * 4, 0, 255).astype(np.uint8)
     dist8 = cv2.GaussianBlur(dist8, (0, 0), 1.2)
     t, mask = cv2.threshold(dist8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -155,7 +247,9 @@ def segment(rect: np.ndarray, margin_mm: float = 8.0) -> np.ndarray:
     # contornos por gradiente -> cierre -> relleno de huecos pequenos, solo cerca de objetos ya detectados
     gray = cv2.GaussianBlur(cv2.cvtColor(rect, cv2.COLOR_BGR2GRAY), (0, 0), 1.5)
     edges = cv2.Canny(gray, 25, 70)
+    edges_weak = cv2.Canny(gray, 12, 36)                # solo para medir la 'ocupacion' de huecos (codigos, texto)
     near = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(NEAR_MM * 2) * PX_PER_MM | 1,) * 2))
+    edges_raw = edges_weak
     edges = cv2.bitwise_and(edges, near)
     edges = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
     ek = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(3 * PX_PER_MM) | 1,) * 2)
@@ -166,8 +260,20 @@ def segment(rect: np.ndarray, margin_mm: float = 8.0) -> np.ndarray:
     for i in range(1, n):
         x, y, w, h, a = st[i]
         touches = x == 0 or y == 0 or x + w == W or y + h == H
-        if not touches and a < 120 * PX_PER_MM ** 2:
+        if touches:
+            continue
+        if a < 120 * PX_PER_MM ** 2:
             shape[lbl == i] = 255
+        elif a < 9000 * PX_PER_MM ** 2:
+            # hueco encerrado grande: si por dentro NO es papel limpio forma parte del objeto
+            # (hoja metalica de una espatula, estuche transparente con etiquetas y codigos de barras);
+            # si es papel limpio y liso (agujero real, p. ej. los del MDF) se conserva como hueco
+            inside = lbl == i
+            frac = float(np.mean(dist8[inside] > 0.5 * max(t, 8)))
+            core = cv2.erode(inside.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * 3 + 1,) * 2)) > 0
+            busy = float(np.mean(edges_raw[core] > 0)) if core.any() else 0.0
+            if frac > 0.30 or busy > 0.012:
+                shape[inside] = 255
     mask = cv2.morphologyEx(shape, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
     # unir partes de un mismo objeto (p. ej. dos mangos de unas pinzas) si estan a < 6 mm
     gk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(6 * PX_PER_MM) | 1,) * 2)
