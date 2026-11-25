@@ -236,7 +236,8 @@
           <label>Depth (mm)<input type="number" id="s-mdep" min="1" max="4" step="0.1"></label>
         </div>
         <h3 class="sec">Loose dividers</h3>
-        <p class="muted">Láminas sueltas que se insertan desde arriba en ranuras del bin (se imprimen tumbadas, en un STL aparte). Son útiles en un <b>contenedor vacío</b> (bin sin siluetas: menú + de la barra Bins → <i>Contenedor vacío</i>) para repartir tornillos u otras piezas sueltas.</p>
+        <p class="muted"><b>Sueltos:</b> láminas que se insertan desde arriba en ranuras del bin (se imprimen tumbadas, en un STL aparte; donde se cruzan una vertical y una horizontal encajan por muescas a media altura). <b>Integrados:</b> paredes impresas junto con el bin. Son útiles en un <b>contenedor vacío</b> (bin sin siluetas: menú + de la barra Bins → <i>Contenedor vacío</i>) para repartir tornillos u otras piezas sueltas.</p>
+        <label>Mode<select id="s-dmode"><option value="loose">Sueltos (piezas aparte con ranuras)</option><option value="fixed">Integrados en el bin (se imprimen con él)</option></select></label>
         <div class="duo">
           <label>Vertical ‖ (count)<input type="number" id="s-dxn" min="0" max="10" step="1"></label>
           <label>Horizontal ═ (count)<input type="number" id="s-dyn" min="0" max="10" step="1"></label>

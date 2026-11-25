@@ -34,6 +34,7 @@ DEFAULT_SETTINGS = {
     "hollow": False, "hollow_rib_mm": 2.4, "hollow_floor_mm": 1.2,
     "lid_thickness_mm": 1.2, "lid_ledge_mm": 0.8, "lid_clearance_mm": 0.2,
     "dividers_x": [], "dividers_y": [], "divider_thickness_mm": 1.2, "divider_clearance_mm": 0.2, "divider_slot_depth_mm": 0.8,
+    "dividers_mode": "loose",
 }
 MIN_FLOOR = 1.0
 FINGER_D = 16.0
@@ -263,44 +264,88 @@ def _printability(items, S, W, D, H, lid_t, hollow, stats, lid, warns_n):
 
 
 def _divider_parts(S, zone, fp, floor_min, H, wall, hollow, warns):
-    """Ranuras (se restan del bin, abiertas por arriba) y laminas sueltas que encajan en ellas.
+    """Divisores: devuelve (ranuras a restar, laminas sueltas, paredes fijas a sumar).
 
-    Las posiciones estan en el marco del editor (origen en el centro, Y hacia abajo). Cada ranura penetra
-    `divider_slot_depth_mm` en la pared (siempre dejando >= 0.8 mm de pared) y baja hasta justo encima del suelo."""
+    Las posiciones estan en el marco del editor (origen en el centro, Y hacia abajo).
+    - modo "loose": cada ranura penetra `divider_slot_depth_mm` en la pared (dejando >= 0.8 mm) y baja hasta justo encima
+      del suelo; las laminas se imprimen tumbadas y, donde se cruzan una vertical y una horizontal, llevan una muesca de
+      media altura (la vertical desde arriba, la horizontal desde abajo) para encajar entre si.
+    - modo "fixed": paredes impresas junto con el bin (un solo cuerpo)."""
     dx = [float(v) for v in (S.get("dividers_x") or [])]
     dy = [float(v) for v in (S.get("dividers_y") or [])]
     if not dx and not dy:
-        return [], []
+        return [], [], None
     if hollow:
-        warns.append("los divisores sueltos no estan disponibles en modo hueco: se ignoraron")
-        return [], []
+        warns.append("los divisores no estan disponibles en modo hueco: se ignoraron")
+        return [], [], None
+    fixed = S.get("dividers_mode") == "fixed"
     t, cl = float(S["divider_thickness_mm"]), float(S["divider_clearance_mm"])
+    big = 5000.0
+
+    def line(axis, wpos, width):
+        return sbox(wpos - width / 2, -big, wpos + width / 2, big) if axis == "x" else sbox(-big, wpos - width / 2, big, wpos + width / 2)
+
+    if fixed:
+        area = zone.buffer(0.3, 12)       # se solapan 0.3 mm con la pared para fundirse con ella
+        if fp is not None:
+            area = area.intersection(fp.buffer(-0.8, 12))
+        parts = []
+        for axis, vals in (("x", dx), ("y", dy)):
+            for pos in vals:
+                r = line(axis, pos if axis == "x" else -pos, t).intersection(area)
+                if r.is_empty or r.area < 1.0:
+                    warns.append(f"un divisor en {axis} = {pos:.1f} mm cae fuera del bin: se ignoro")
+                    continue
+                parts.append(r)
+        if not parts:
+            return [], [], None
+        top = H - 0.4
+        return [], [], extrude_poly(unary_union(parts).simplify(0.01), FOOT_H + 0.5, top)
+
     sd = max(0.0, min(float(S["divider_slot_depth_mm"]), wall - 0.8))
     sw = t + 2 * cl
     reach = zone.buffer(sd, 12)
     if fp is not None:
         reach = reach.intersection(fp.buffer(-0.8, 12))
     slot_z = floor_min + 0.07
-    big = 5000.0
-    cuts, blades = [], []
     bh = H - 1.0 - slot_z - 0.1                      # la lamina queda 1 mm por debajo del borde
     if bh < 3.0:
         warns.append("el bin es demasiado bajo para divisores sueltos")
-        return [], []
+        return [], [], None
+    specs = []   # (eje, pos mundo, region de la ranura, longitud, centro a lo largo del eje)
     for axis, vals in (("x", dx), ("y", dy)):
         for pos in vals:
             wpos = pos if axis == "x" else -pos      # editor Y hacia abajo -> mundo Y hacia arriba
-            r = (sbox(wpos - sw / 2, -big, wpos + sw / 2, big) if axis == "x"
-                 else sbox(-big, wpos - sw / 2, big, wpos + sw / 2)).intersection(reach)
+            r = line(axis, wpos, sw).intersection(reach)
             if r.is_empty or r.area < 1.0:
                 warns.append(f"un divisor en {axis} = {pos:.1f} mm cae fuera del bin: se ignoro")
                 continue
             r = unary_union([g for g in (r.geoms if hasattr(r, "geoms") else [r]) if g.area > 1.0])
             b = r.bounds
-            L = (b[3] - b[1]) if axis == "x" else (b[2] - b[0])
-            cuts.append(extrude_poly(r.simplify(0.01), slot_z, H + LIP_H + 2.0))
-            blades.append(Manifold.cube((max(L - 0.4, 2.0), bh, t)))   # 0.4 mm de holgura en los extremos
-    return cuts, blades
+            L, ctr = ((b[3] - b[1]), (b[1] + b[3]) / 2) if axis == "x" else ((b[2] - b[0]), (b[0] + b[2]) / 2)
+            specs.append((axis, wpos, r, L, ctr))
+    cuts, blades = [], []
+    nw_ = t + cl                                     # ancho de la muesca de cruce
+    nd_ = bh / 2 + 0.15                              # cada muesca algo mas profunda que la mitad: no hay interferencia
+    for axis, wpos, r, L, ctr in specs:
+        cuts.append(extrude_poly(r.simplify(0.01), slot_z, H + LIP_H + 2.0))
+        Lb = max(L - 0.4, 2.0)                       # 0.4 mm de holgura en los extremos
+        bl = Manifold.cube((Lb, bh, t))
+        for axis2, wpos2, r2_, _, _ in specs:
+            if axis2 == axis:
+                continue
+            p = (wpos, wpos2) if axis == "x" else (wpos2, wpos)   # (x, y) mundo del cruce
+            if not (r.buffer(0.01).contains(Point(p)) and r2_.buffer(0.01).contains(Point(p))):
+                continue
+            u = (p[1] if axis == "x" else p[0]) - ctr + Lb / 2     # posicion del cruce a lo largo de la lamina
+            u = min(max(u, nw_ / 2 + 0.2), Lb - nw_ / 2 - 0.2)
+            if axis == "x":      # vertical: muesca desde arriba
+                notch = Manifold.cube((nw_, nd_ + 1.0, t + 2.0)).translate((u - nw_ / 2, bh - nd_, -1.0))
+            else:                # horizontal: muesca desde abajo
+                notch = Manifold.cube((nw_, nd_ + 1.0, t + 2.0)).translate((u - nw_ / 2, -1.0, -1.0))
+            bl = bl - notch
+        blades.append(bl)
+    return cuts, blades, None
 
 
 def _blade_row(blades):
@@ -471,7 +516,9 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
         else:
             warns.append("no queda espacio para vaciar el bin (las costillas ocupan todo): reduce el grosor de costilla")
     solid = solid - Manifold.batch_boolean(cutters, 0)   # un solo corte: evita intermedios degenerados
-    slot_cut, blades = _divider_parts(S, zone, fp, floor_min, H, wall, hollow, warns)
+    slot_cut, blades, div_walls = _divider_parts(S, zone, fp, floor_min, H, wall, hollow, warns)
+    if div_walls is not None:   # divisores integrados: paredes que forman parte del bin
+        solid = solid + div_walls
     if hollow and lid is not None:
         stats["bin_cm3"] = round(solid.volume() / 1000, 2)
         stats["lid_cm3"] = round(lid.volume() / 1000, 2)
@@ -490,12 +537,16 @@ def build_design(comps: list[dict], shapes: list[dict], S: dict) -> DesignResult
     insert = Manifold.batch_boolean([m for m in inserts if m is not None], 0) if inserts else None
 
     checks = _printability(items, S, W, D, H, S["lid_thickness_mm"], hollow, stats, lid, len(warns))
+    n_fixed = len((S.get("dividers_x") or [])) + len((S.get("dividers_y") or []))
+    if div_walls is not None:
+        checks.append({"level": "info", "code": "dividers", "shapes": [],
+                       "msg": f"{n_fixed} divisor(es) integrado(s) de {S['divider_thickness_mm']:.1f} mm: se imprimen con el bin"})
     if blades:
         nz = float(S["nozzle_mm"])
         if S["divider_thickness_mm"] < 2 * nz:
             checks.append({"level": "warn", "code": "divider_thin", "shapes": [],
                            "msg": f"el divisor ({S['divider_thickness_mm']:.1f} mm) es menor que 2 pasadas de boquilla ({2 * nz:.1f} mm)"})
         checks.append({"level": "info", "code": "dividers", "shapes": [],
-                       "msg": f"{len(blades)} divisor(es) suelto(s) de {S['divider_thickness_mm']:.1f} mm: se imprimen tumbados (archivo aparte)"})
+                       "msg": f"{len(blades)} divisor(es) suelto(s) de {S['divider_thickness_mm']:.1f} mm: se imprimen tumbados (archivo aparte); donde se cruzan encajan por las muescas"})
     return DesignResult(solid, insert, (nw, nd), (W, D), total_h, pockets_all, warns,
                         {k: sorted(v) for k, v in problems.items()}, lid, stats, checks, _blade_row(blades))

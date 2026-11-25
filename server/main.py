@@ -201,6 +201,7 @@ class SettingsIn(BaseModel):
     divider_thickness_mm: float = Field(1.2, ge=0.6, le=4)
     divider_clearance_mm: float = Field(0.2, ge=0, le=0.6)
     divider_slot_depth_mm: float = Field(0.8, ge=0, le=3)
+    dividers_mode: Literal["loose", "fixed"] = "loose"
 
 
 class DesignIn(BaseModel):

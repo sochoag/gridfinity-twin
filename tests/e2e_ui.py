@@ -418,6 +418,10 @@ try:
         pg.fill("#s-dys", "0"); pg.press("#s-dys", "Tab"); ready2()
         check("divisores: el bin los genera (STL aparte, malla cerrada)", pg.evaluate("window.__twin.st.bin_meta.has_dividers && window.__twin.st.bin_meta.dividers.watertight && window.__twin.st.bin_meta.mesh.watertight"))
         check("divisores: aviso informativo en Printability", "divisor" in pg.inner_text("#checks"), pg.inner_text("#checks")[:120])
+        pg.select_option("#s-dmode", "fixed"); ready2()
+        check("divisores integrados: sin STL aparte y con aviso", pg.evaluate("!window.__twin.st.bin_meta.has_dividers && window.__twin.st.bin_meta.checks.some(c => c.msg.includes('integrado'))") and pg.is_disabled("#s-dcl"))
+        pg.select_option("#s-dmode", "loose"); ready2()
+        check("divisores sueltos de nuevo", pg.evaluate("window.__twin.st.bin_meta.has_dividers") and not pg.is_disabled("#s-dcl"))
         pg.fill("#s-dxn", "0"); pg.press("#s-dxn", "Tab"); pg.fill("#s-dys", ""); pg.press("#s-dys", "Tab"); ready2()
         check("divisores: quitar los deja en 0", J("return CFG().dividers_x.length + CFG().dividers_y.length") == 0 and pg.locator("#lay-svg .div-line").count() == 0, str(J("return [CFG().dividers_x, CFG().dividers_y]")))
 

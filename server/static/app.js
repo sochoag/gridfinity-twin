@@ -434,7 +434,7 @@ const DEFAULT_SETTINGS = {
   stacking_lip: true, magnet_holes: false, magnet_diameter_mm: 6.5, magnet_depth_mm: 2.4,
   partial: false, cells_off: [], bed_x_mm: 256, bed_y_mm: 256, nozzle_mm: 0.4,
   hollow: false, hollow_rib_mm: 2.4, hollow_floor_mm: 1.2, lid_thickness_mm: 1.2, lid_ledge_mm: 0.8, lid_clearance_mm: 0.2,
-  dividers_x: [], dividers_y: [], divider_thickness_mm: 1.2, divider_clearance_mm: 0.2, divider_slot_depth_mm: 0.8,
+  dividers_x: [], dividers_y: [], divider_thickness_mm: 1.2, divider_clearance_mm: 0.2, divider_slot_depth_mm: 0.8, dividers_mode: 'loose',
 };
 const E = { multi: new Set(), sel: null, tool: null, pts: false, building: false, pending: false, timer: 0, meta: null, drag: null, menu: null };
 const D = () => S.st.design;
@@ -1465,11 +1465,14 @@ for (const [axis, nId, tId, key] of [['x', 's-dxn', 's-dxs', 'dividers_x'], ['y'
   });
   $(tId).addEventListener('change', () => { CFG()[key] = parseList($(tId).value); renderSettings(); renderLayout(); scheduleBuild(); });
 }
+$('s-dmode').addEventListener('change', () => { CFG().dividers_mode = $('s-dmode').value; renderSettings(); scheduleBuild(); });
 function renderDividerFields() {
   const c = CFG();
+  $('s-dmode').value = c.dividers_mode || 'loose';
   $('s-dxn').value = (c.dividers_x || []).length; $('s-dyn').value = (c.dividers_y || []).length;
   $('s-dxs').value = (c.dividers_x || []).join(', '); $('s-dys').value = (c.dividers_y || []).join(', ');
-  for (const id of ['s-dxn', 's-dyn', 's-dxs', 's-dys', 's-dth', 's-dcl', 's-dsd']) $(id).disabled = !!c.hollow;
+  for (const id of ['s-dxn', 's-dyn', 's-dxs', 's-dys', 's-dth', 's-dmode']) $(id).disabled = !!c.hollow;
+  for (const id of ['s-dcl', 's-dsd']) $(id).disabled = !!c.hollow || c.dividers_mode === 'fixed';
 }
 
 /* ---- v1.3: generador de compartimentos (filas × columnas de bolsillos rectangulares) */

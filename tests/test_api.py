@@ -345,6 +345,12 @@ def test_loose_dividers():
     meta2 = c.put(f"/api/sessions/{sid}/design", json=des).json()
     assert not meta2["has_dividers"] and meta2["mesh"]["volume_cm3"] > v_with
     assert c.get(f"/api/sessions/{sid}/dividers.stl").status_code == 404
+    # integrados: sin STL aparte, el bin los lleva (mas volumen que con ranuras) y sigue cerrado
+    des["settings"].update(dividers_x=[-30, 30], dividers_y=[0], dividers_mode="fixed")
+    mf = c.put(f"/api/sessions/{sid}/design", json=des).json()
+    assert not mf["has_dividers"] and mf["mesh"]["watertight"] and mf["mesh"]["volume_cm3"] > meta2["mesh"]["volume_cm3"]
+    assert any("integrado" in k["msg"] for k in mf["checks"])
+    des["settings"].update(dividers_mode="loose")
     # modo hueco: se ignoran con aviso
     des["settings"].update(dividers_x=[0], hollow=True)
     m3 = c.put(f"/api/sessions/{sid}/design", json=des).json()
@@ -457,3 +463,22 @@ def test_empty_container_and_complement():
     des["settings"].update(partial=False, cells_off=[])
     c.put(f"/api/sessions/{sid}/design", json=des)
     assert c.post(f"/api/sessions/{sid}/bins", json={"copy_from": "b1", "mode": "complement"}).status_code == 422
+
+
+def test_dividers_interlock():
+    from manifold3d import Manifold
+    from shapely.geometry import box
+    from geometry import design as D
+    S = dict(D.DEFAULT_SETTINGS, dividers_x=[-20, 20], dividers_y=[0, 30])
+    cuts, blades, _ = D._divider_parts(S, box(-60, -60, 60, 60), None, 6.0, 28.0, 1.6, False, [])
+    assert len(blades) == 4
+
+    def stand(bl, axis, pos):
+        bb = bl.bounding_box()
+        m = bl.translate((-(bb[3] - bb[0]) / 2, 0, -(bb[5] - bb[2]) / 2)).rotate((90, 0, 0))
+        return (m.rotate((0, 0, 90)).translate((pos, 0, 6.07))) if axis == "x" else m.translate((0, pos, 6.07))
+    xs = [stand(blades[0], "x", -20), stand(blades[1], "x", 20)]
+    ys = [stand(blades[2], "y", 0), stand(blades[3], "y", -30)]
+    assert sum((a ^ b).volume() for a in xs for b in ys) < 1e-6          # encajan sin interferir
+    raw = Manifold.cube((100, 20, 1.2))
+    assert (stand(raw, "x", -20) ^ stand(raw, "y", 0)).volume() > 10     # sin muescas chocarian
