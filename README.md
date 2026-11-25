@@ -75,3 +75,11 @@ docker compose ps                      # app y caddy deben quedar "running/healt
 - Datos persistentes en el volumen `twin-data`. Respaldo: `docker run --rm -v gridfinity-twin_twin-data:/d -v $PWD:/b alpine tar czf /b/twin-data.tgz -C /d .`
 - Actualizar: sube el código nuevo y `docker compose up -d --build`. Logs: `docker compose logs -f app`.
 - Abre solo los puertos 80 y 443 en el firewall del VPS.
+
+
+## v1.4 · Interfaz
+
+- Tema oscuro azul-pizarra pensado para no cansar la vista.
+- El editor del bin ocupa toda la pantalla: **panel de ajustes a la izquierda** (secciones plegables) y **2D + 3D a lado y lado** como protagonistas.
+- Barra de menús **Archivo / Editar / Herramientas / Ver / Ayuda** (el menú Herramientas reúne añadir formas, compartimentos, importaciones y bins nuevos; Ver controla la cámara 3D y los paneles) y botón **Exportar** arriba a la derecha.
+- Barra de bins y formas en una sola tira; controles de vista 3D flotando sobre el visor.

@@ -72,6 +72,7 @@ function go(view) {
   if (view === 'corners') renderCorners();
   if (view === 'shape') renderShape();
   $('main').classList.toggle('wide', view === 'bin');
+  document.body.classList.toggle('bin-mode', view === 'bin');
   if (view === 'bin') renderBin();
   window.scrollTo({ top: 0 });
 }
@@ -626,7 +627,7 @@ function setDownloads(on) {
 }
 
 /* ---- pestañas de formas */
-function closeMenu() { if (E.menu) { E.menu.remove(); E.menu = null; } }
+function closeMenu() { if (E.menu) { E.menu.remove(); E.menu = null; } document.querySelectorAll('#menubar button.on').forEach((x) => x.classList.remove('on')); }
 function openMenu(anchor, items) {
   closeMenu();
   const m = document.createElement('div');
@@ -648,6 +649,9 @@ function openMenu(anchor, items) {
 }
 document.addEventListener('click', (e) => { if (E.menu && !E.menu.contains(e.target)) closeMenu(); });
 
+function shapeAddItems() {
+  return [{ head: 'Objetos detectados' }, ...S.st.contours.components.map((c) => ({ label: `◻ Objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => addShape(c.id) })), '-', { head: 'Crear' }, { label: '✏️ Forma manual (medidas / dibujo)…', fn: openManual }, { label: '▦ Compartimentos (filas × columnas)…', fn: openCompartments }, '-', { head: 'Importar' }, { label: '📐 Importar SVG o DXF…', fn: openVector }, { label: '📁 Importar de otro proyecto…', fn: openImport }, { label: '⭐ Biblioteca de formas…', fn: openLibrary }];
+}
 function renderTabs() {
   const box = $('ed-tabs');
   box.replaceChildren();
@@ -681,7 +685,7 @@ function renderTabs() {
   plus.className = 'tab-plus'; plus.textContent = '+'; plus.title = 'Añadir un objeto detectado o importar de otro proyecto'; plus.setAttribute('aria-label', 'Añadir forma');
   plus.addEventListener('click', (e) => {
     e.stopPropagation();
-    openMenu(plus, [{ head: 'Objetos detectados' }, ...S.st.contours.components.map((c) => ({ label: `◻ Objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => addShape(c.id) })), '-', { head: 'Crear' }, { label: '✏️ Forma manual (medidas / dibujo)…', fn: openManual }, { label: '▦ Compartimentos (filas × columnas)…', fn: openCompartments }, '-', { head: 'Importar' }, { label: '📐 Importar SVG o DXF…', fn: openVector }, { label: '📁 Importar de otro proyecto…', fn: openImport }, { label: '⭐ Biblioteca de formas…', fn: openLibrary }]);
+    openMenu(plus, shapeAddItems());
   });
   box.append(plus);
 }
@@ -892,7 +896,7 @@ function openManual() {
       if (ring.length) {
         const b = bboxFromRing(ring), f = Math.min(1, 100 / Math.max(b.width, b.height, 1));
         const g = svgEl('g', { transform: `scale(${f})` });
-        g.append(svgEl('path', { d: pathD(ring), class: 'shp-body', fill: '#f5d9c8', stroke: '#e0561a', 'stroke-width': 1.2 / f }));
+        g.append(svgEl('path', { d: pathD(ring), class: 'shp-body', fill: '#1f3a56', stroke: '#4db5f5', 'stroke-width': 1.2 / f }));
         pv.append(g);
         M.info.textContent = `${b.width.toFixed(1)} × ${b.height.toFixed(1)} mm${f < 1 ? ' (vista reducida)' : ''}`;
       } else M.info.textContent = 'Medidas no válidas';
@@ -902,8 +906,8 @@ function openManual() {
       for (let i = 0; i <= 200; i += 10) cv.append(svgEl('line', { x1: i, y1: 0, x2: i, y2: 130, class: 'bin-grid' }));
       for (let j = 0; j <= 130; j += 10) cv.append(svgEl('line', { x1: 0, y1: j, x2: 200, y2: j, class: 'bin-grid' }));
       if (pts.length) {
-        cv.append(svgEl(closed ? 'polygon' : 'polyline', { points: pts.map((p) => p.join(',')).join(' '), fill: closed ? '#f5d9c8' : 'none', stroke: '#e0561a', 'stroke-width': 0.8 }));
-        pts.forEach((p) => cv.append(svgEl('circle', { cx: p[0], cy: p[1], r: 1.4, fill: '#e0561a' })));
+        cv.append(svgEl(closed ? 'polygon' : 'polyline', { points: pts.map((p) => p.join(',')).join(' '), fill: closed ? '#1f3a56' : 'none', stroke: '#4db5f5', 'stroke-width': 0.8 }));
+        pts.forEach((p) => cv.append(svgEl('circle', { cx: p[0], cy: p[1], r: 1.4, fill: '#4db5f5' })));
       }
       ring = closed && pts.length >= 3 ? pts.map((p) => [p[0], p[1]]) : [];
       if (ring.length) { const b = bboxFromRing(ring); $m('mn-dim').textContent = `${b.width.toFixed(0)} × ${b.height.toFixed(0)} mm`; } else $m('mn-dim').textContent = `${pts.length} punto${pts.length === 1 ? '' : 's'}`;
@@ -1392,6 +1396,19 @@ async function newBin(opts) {
   try { await loadBin(nb.id); } catch (e) { return toast(e.message, true); }
   renderBin();
 }
+function binNewItems() {
+  return [
+      { head: 'Nuevo bin' }, { label: '🧱 Bin con todos los objetos', fn: () => newBin({ comps: S.st.contours.components.map((c) => c.id) }) },
+      ...S.st.contours.components.map((c) => ({ label: `◻ Bin solo con el objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => newBin({ comps: [c.id] }) })),
+      '-', { head: 'A partir del actual' }, { label: '⧉ Duplicar el bin actual', fn: () => newBin({ copy: true }) },
+      { label: '⇄ Complemento del bin actual (Partial bin, vacío)', fn: () => {
+        const c = CFG();
+        if (!c.partial || !(c.cells_off || []).length) return toast('Activa Partial bin y apaga alguna celda: el complemento rellena ese hueco', true);
+        newBin({ mode: 'complement', name: `${binList().find((x) => x.id === S.bin).name} · complemento` });
+      } },
+      { label: '🗃 Contenedor vacío (sin siluetas, p. ej. tornillos)', fn: () => newBin({ mode: 'empty', name: 'Contenedor' }) },
+    ];
+}
 function renderBinTabs() {
   const box = $('bin-tabs');
   box.replaceChildren();
@@ -1430,17 +1447,7 @@ function renderBinTabs() {
   plus.className = 'tab-plus'; plus.textContent = '+'; plus.title = 'Añadir otro bin al proyecto'; plus.setAttribute('aria-label', 'Añadir bin');
   plus.addEventListener('click', (e) => {
     e.stopPropagation();
-    openMenu(plus, [
-      { head: 'Nuevo bin' }, { label: '🧱 Bin con todos los objetos', fn: () => newBin({ comps: S.st.contours.components.map((c) => c.id) }) },
-      ...S.st.contours.components.map((c) => ({ label: `◻ Bin solo con el objeto ${c.id + 1} · ${c.bbox.width.toFixed(0)} × ${c.bbox.height.toFixed(0)} mm`, fn: () => newBin({ comps: [c.id] }) })),
-      '-', { head: 'A partir del actual' }, { label: '⧉ Duplicar el bin actual', fn: () => newBin({ copy: true }) },
-      { label: '⇄ Complemento del bin actual (Partial bin, vacío)', fn: () => {
-        const c = CFG();
-        if (!c.partial || !(c.cells_off || []).length) return toast('Activa Partial bin y apaga alguna celda: el complemento rellena ese hueco', true);
-        newBin({ mode: 'complement', name: `${binList().find((x) => x.id === S.bin).name} · complemento` });
-      } },
-      { label: '🗃 Contenedor vacío (sin siluetas, p. ej. tornillos)', fn: () => newBin({ mode: 'empty', name: 'Contenedor' }) },
-    ]);
+    openMenu(plus, binNewItems());
   });
   box.append(plus);
 }
@@ -1514,7 +1521,7 @@ function openCompartments() {
     if (!plan) { M.info.textContent = cols * rows > 40 ? 'Demasiados compartimentos (máx. 40 formas por bin)' : 'Medidas no válidas (¿compartimento demasiado pequeño?)'; M.go.disabled = true; return; }
     const TW = cols * pw + (cols - 1) * dw, TH = rows * ph + (rows - 1) * dw, f = Math.min(100 / TW, 64 / TH);
     const g = svgEl('g', { transform: `scale(${f})` });
-    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) g.append(svgEl('rect', { x: -TW / 2 + i * (pw + dw), y: -TH / 2 + j * (ph + dw), width: pw, height: ph, rx: Math.min(rr, pw / 2, ph / 2), fill: '#f5d9c8', stroke: '#e0561a', 'stroke-width': 0.8 / f }));
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) g.append(svgEl('rect', { x: -TW / 2 + i * (pw + dw), y: -TH / 2 + j * (ph + dw), width: pw, height: ph, rx: Math.min(rr, pw / 2, ph / 2), fill: '#1f3a56', stroke: '#4db5f5', 'stroke-width': 0.8 / f }));
     pv.append(g);
     M.info.textContent = `${cols * rows} compartimentos de ${pw.toFixed(1)} × ${ph.toFixed(1)} mm · conjunto ${TW.toFixed(0)} × ${TH.toFixed(0)} mm`;
     M.go.disabled = false;
@@ -1656,6 +1663,67 @@ $('btn-merge').addEventListener('click', async () => {
   });
 });
 
+/* ---- v1.4: barra de menus (Archivo / Editar / Herramientas / Ver / Ayuda) */
+const clickId = (id) => () => { const el = $(id); if (el && !el.disabled && !el.classList.contains('disabled')) el.click(); };
+const MENUS = {
+  file: () => [
+    { label: '🏠 Mis proyectos', fn: () => go('home') },
+    { label: '‹ Volver a la silueta', fn: () => go('shape') },
+    '-', { head: 'Exportar' },
+    { label: '📦 STLs (.zip)', fn: clickId('dl-zip') },
+    { label: '🧩 3MF con colores', fn: clickId('dl-3mf') },
+    { label: '✏️ Contorno (.svg)', fn: clickId('dl-svg') },
+    ...($('dl-all-wrap').classList.contains('hidden') ? [] : ['-', { head: 'Todos los bins' }, { label: '📦 Todos (.zip)', fn: clickId('dl-all-zip') }, { label: '🧩 Todos (.3mf)', fn: clickId('dl-all-3mf') }]),
+  ],
+  edit: () => [
+    { label: '↶ Deshacer', fn: clickId('btn-undo') },
+    { label: '↷ Rehacer', fn: clickId('btn-redo') },
+    '-', { label: '⤢ Reordenar formas', fn: clickId('btn-arrange') },
+    { label: '⟲ Restablecer ajustes', fn: clickId('s-reset') },
+  ],
+  tools: () => [...shapeAddItems(), '-', ...binNewItems()],
+  view: () => [
+    { head: 'Vista 3D' },
+    ...[['reset', '↺ Isométrica'], ['top', '↑ Superior'], ['front', '→ Frontal'], ['side', '⊙ Lateral'], ['iso', '◇ Encuadrar']].map(([v, l]) => ({ label: l, fn: () => S.viewer && S.viewer.view(v) })),
+    { label: '🎨 Cambiar colores', fn: () => S.viewer && S.viewer.palette() },
+    ...($('v-lid').classList.contains('hidden') ? [] : [{ label: '🔲 Tapa: montada / separada / oculta', fn: clickId('v-lid') }]),
+    '-', { head: 'Paneles' },
+    { label: document.body.classList.contains('no-side') ? '▤ Mostrar panel de ajustes' : '▤ Ocultar panel de ajustes', fn: toggleSide },
+    { label: '⇕ Expandir / contraer secciones', fn: clickId('s-acc-all') },
+  ],
+  help: () => [
+    { label: '⌨ Atajos y consejos', fn: openHelp },
+  ],
+};
+function toggleSide() { document.body.classList.toggle('no-side'); setTimeout(() => S.viewer && S.viewer.resize(), 30); }
+function openHelp() {
+  const ov = document.createElement('div');
+  ov.className = 'modal-ov';
+  ov.innerHTML = `<div class="modal"><div class="modal-h"><b>Atajos y consejos</b><span class="grow"></span><button class="link" id="hp-x" aria-label="Cerrar">✕</button></div><div class="modal-b help">
+    <p><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> deshacer / rehacer.</p>
+    <p><kbd>Shift</kbd>+clic selecciona varias formas para alinear o distribuir.</p>
+    <p>Arrastra una forma en el 2D para moverla; usa el asa circular para girarla.</p>
+    <p>En el 3D: arrastrar gira, la rueda hace zoom y el clic derecho desplaza.</p>
+    <p>El menú <b>Herramientas</b> reúne todo lo que se puede añadir: formas, compartimentos, importaciones y bins nuevos.</p>
+    <p>Los divisores <b>sueltos</b> se imprimen aparte y encajan por muescas; los <b>integrados</b> salen con el bin.</p></div></div>`;
+  document.body.append(ov);
+  const close = () => ov.remove();
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+  ov.querySelector('#hp-x').addEventListener('click', close);
+  document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } });
+}
+(() => {
+  const bar = $('menubar');
+  const btns = [...bar.querySelectorAll('button[data-menu]')];
+  const open = (b) => { openMenu(b, MENUS[b.dataset.menu]()); btns.forEach((x) => x.classList.toggle('on', x === b)); };
+  btns.forEach((b) => {
+    b.addEventListener('click', (e) => { e.stopPropagation(); if (b.classList.contains('on') && E.menu) { closeMenu(); b.classList.remove('on'); } else open(b); });
+    b.addEventListener('mouseenter', () => { if (E.menu && btns.some((x) => x.classList.contains('on')) && !b.classList.contains('on')) open(b); });
+  });
+  document.addEventListener('click', () => btns.forEach((x) => x.classList.remove('on')));
+  $('btn-side').addEventListener('click', toggleSide);
+})();
+
 /* ---- v1.3: ajustes en secciones plegables y menu Exportar */
 const ACC_KEY = 'twin.acc';
 const accOpen = () => { try { const v = JSON.parse(localStorage.getItem(ACC_KEY) || 'null'); return v === 'all' ? 'all' : Array.isArray(v) ? v : ['size']; } catch (e) { return ['size']; } };
@@ -1721,7 +1789,7 @@ async function renderBin() {
 
 /* ---- visor 3D (bin + inserto) */
 const PALETTES = [
-  { bin: 0x3b3b3f, insert: 0xe0561a, lid: 0x6b6b72, dividers: 0xe9a23b }, { bin: 0xc9c6bd, insert: 0x2d6cdf, lid: 0x9d9a90, dividers: 0xd9822b }, { bin: 0x2f6f4f, insert: 0xf2b134, lid: 0x58a07e, dividers: 0xe8d7a1 }, { bin: 0x4a4e8a, insert: 0xe8d7a1, lid: 0x7c80c4, dividers: 0xf2b134 },
+  { bin: 0x3a8fd9, insert: 0xe8e8e8, lid: 0x7fb069, dividers: 0xe9a23b }, { bin: 0x3b3b3f, insert: 0xe0561a, lid: 0x6b6b72, dividers: 0xe9a23b }, { bin: 0xc9c6bd, insert: 0x2d6cdf, lid: 0x9d9a90, dividers: 0xd9822b }, { bin: 0x2f6f4f, insert: 0xf2b134, lid: 0x58a07e, dividers: 0xe8d7a1 }, { bin: 0x4a4e8a, insert: 0xe8d7a1, lid: 0x7c80c4, dividers: 0xf2b134 },
 ];
 function initViewer() {
   if (S.viewer) { S.viewer.resize(); return; }
@@ -1739,10 +1807,10 @@ function initViewer() {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(35, 1, 1, 5000);
   camera.up.set(0, 0, 1);
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8478, 1.15));
+  scene.add(new THREE.HemisphereLight(0xdbeaff, 0x2c4560, 1.15));
   const key = new THREE.DirectionalLight(0xffffff, 1.7); key.position.set(120, -160, 260); scene.add(key);
   const fill = new THREE.DirectionalLight(0xffffff, 0.5); fill.position.set(-200, 120, 80); scene.add(fill);
-  const grid = new THREE.GridHelper(900, 90, 0xcfcfd2, 0xe2e2e5);
+  const grid = new THREE.GridHelper(900, 90, 0x2f6aa3, 0x1c3248);
   grid.rotation.x = Math.PI / 2; grid.position.z = -0.05;
   scene.add(grid);
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -1794,22 +1862,25 @@ function initViewer() {
   renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
   S.viewer = v;
 }
-let firstFit = true;
+let firstFit = true, loadTok = 0;
 async function loadModels(meta) {
   if (!S.viewer || S.viewer.noGL) return;
+  const tok = ++loadTok, stale = () => tok !== loadTok;   // si llega otra compilacion, esta carga se abandona
   const id = S.st.id, q = `bin=${S.bin}&t=${meta.stamp}`;
+  $('v-lid').classList.toggle('hidden', !meta.has_lid);
   try {
     await S.viewer.load(`/api/sessions/${id}/bin.stl?${q}`, 'bin', firstFit);
+    if (stale()) return;
     firstFit = false;
     if (meta.has_insert) await S.viewer.load(`/api/sessions/${id}/insert.stl?${q}`, 'insert', false);
     else S.viewer.clear('insert');
+    if (stale()) return;
     if (meta.has_dividers) await S.viewer.load(`/api/sessions/${id}/dividers.stl?${q}`, 'dividers', false);
     else S.viewer.clear('dividers');
-    const lb = $('v-lid');
-    lb.classList.toggle('hidden', !meta.has_lid);
+    if (stale()) return;
     if (meta.has_lid) { S.viewer.setLid(meta.stats.lid_z); await S.viewer.load(`/api/sessions/${id}/lid.stl?${q}`, 'lid', false); }
     else S.viewer.clear('lid');
-  } catch (e) { toast('No se pudo cargar la vista previa 3D', true); }
+  } catch (e) { if (!stale()) toast('No se pudo cargar la vista previa 3D', true); }
 }
 document.querySelectorAll('#vbar button').forEach((b) => b.addEventListener('click', () => {
   if (!S.viewer) return;
